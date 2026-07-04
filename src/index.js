@@ -1,19 +1,19 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import { createClient } from "@supabase/supabase-js";
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// In-memory mock data (swap for a real database later)
-const meetings = [
-  { id: 1, name: "Website Redesign", status: "In Progress", progress: 62, lead: "Aarav Shah" },
-  { id: 2, name: "Mobile App", status: "Planning", progress: 20, lead: "Priya Nair" },
-  { id: 3, name: "API Platform", status: "Completed", progress: 100, lead: "Rohan Das" },
-  { id: 4, name: "Design System", status: "In Progress", progress: 45, lead: "Meera Iyer" },
-];
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+);
 
+// Employees remain mock data for now.
 const employees = [
   { id: 1, name: "Aarav Shah", role: "Frontend Developer", email: "aarav@convene.io", status: "Active" },
   { id: 2, name: "Priya Nair", role: "Product Manager", email: "priya@convene.io", status: "Active" },
@@ -23,21 +23,113 @@ const employees = [
   { id: 6, name: "Sara Khan", role: "DevOps Engineer", email: "sara@convene.io", status: "Active" },
 ];
 
+// Verifies the Supabase JWT sent by the frontend and resolves the user's role.
+async function requireAuth(req, res, next) {
+  const token = req.headers.authorization?.replace("Bearer ", "");
+  if (!token) return res.status(401).json({ error: "Missing authorization token" });
+
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user) return res.status(401).json({ error: "Unauthorized" });
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", data.user.id)
+    .single();
+
+  req.user = data.user;
+  req.isAdmin = profile?.role === "admin";
+  next();
+}
+
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", service: "convene-backend" });
 });
 
-app.get("/api/dashboard/stats", (req, res) => {
+app.get("/api/dashboard/stats", async (req, res) => {
+  const { count } = await supabase
+    .from("meetings")
+    .select("*", { count: "exact", head: true });
   res.json({
-    meetings: meetings.length,
+    meetings: count ?? 0,
     employees: employees.length,
     revenue: 84200,
     tasksDone: 76,
   });
 });
 
-app.get("/api/meetings", (req, res) => {
-  res.json(meetings);
+// List meetings: admins see all, everyone else sees only their own.
+app.get("/api/meetings", requireAuth, async (req, res) => {
+  let query = supabase
+    .from("meetings")
+    .select("id, project_name, client_name, title, meeting_at, meeting_type, follow_up_needed")
+    .order("meeting_at", { ascending: false });
+
+  if (!req.isAdmin) query = query.eq("created_by", req.user.id);
+
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// Create a meeting. created_by is taken from the verified token, not the client.
+app.post("/api/meetings", requireAuth, async (req, res) => {
+  const {
+    project_name,
+    client_name,
+    title,
+    meeting_at,
+    notes,
+    attendees,
+    outcome,
+    action_items,
+    duration_minutes,
+    meeting_type,
+    follow_up_needed,
+    attachment_url,
+  } = req.body;
+
+  if (!project_name || !title || !meeting_at) {
+    return res.status(400).json({ error: "project_name, title and meeting_at are required" });
+  }
+
+  const { data, error } = await supabase
+    .from("meetings")
+    .insert({
+      project_name,
+      client_name: client_name || null,
+      title,
+      meeting_at,
+      notes: notes || null,
+      attendees: attendees || null,
+      outcome: outcome || null,
+      action_items: action_items || null,
+      duration_minutes: duration_minutes ? Number(duration_minutes) : null,
+      meeting_type: meeting_type || null,
+      follow_up_needed: Boolean(follow_up_needed),
+      attachment_url: attachment_url || null,
+      created_by: req.user.id,
+    })
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(201).json(data);
+});
+
+// Meeting detail: only the owner or an admin may view it.
+app.get("/api/meetings/:id", requireAuth, async (req, res) => {
+  const { data, error } = await supabase
+    .from("meetings")
+    .select("*")
+    .eq("id", req.params.id)
+    .single();
+
+  if (error || !data) return res.status(404).json({ error: "Meeting not found" });
+  if (!req.isAdmin && data.created_by !== req.user.id) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  res.json(data);
 });
 
 app.get("/api/employees", (req, res) => {
