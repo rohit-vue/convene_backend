@@ -63,7 +63,7 @@ app.get("/api/meetings", requireAuth, async (req, res) => {
   let query = supabase
     .from("meetings")
     .select(
-      "id, project_name, client_name, employee_name, project_type, meeting_at, meeting_status, meeting_outcome",
+      "id, project_name, client_name, employee_name, project_type, upwork_account, meeting_at, meeting_outcome",
     )
     .order("meeting_at", { ascending: false });
 
@@ -81,15 +81,16 @@ app.post("/api/meetings", requireAuth, async (req, res) => {
     client_name,
     employee_name,
     project_type,
+    upwork_account,
     job_description,
     meeting_at,
     duration_minutes,
-    meeting_status,
     meeting_outcome,
     budget_discussed,
     deadline,
     notes,
     requirements_discussed,
+    link_url,
   } = req.body;
 
   if (
@@ -97,12 +98,11 @@ app.post("/api/meetings", requireAuth, async (req, res) => {
     !client_name ||
     !employee_name ||
     !meeting_at ||
-    !meeting_status ||
     !meeting_outcome
   ) {
     return res.status(400).json({
       error:
-        "project_name, client_name, employee_name, meeting_at, meeting_status and meeting_outcome are required",
+        "project_name, client_name, employee_name, meeting_at and meeting_outcome are required",
     });
   }
 
@@ -113,15 +113,16 @@ app.post("/api/meetings", requireAuth, async (req, res) => {
       client_name,
       employee_name,
       project_type: project_type || null,
+      upwork_account: upwork_account || null,
       job_description: job_description || null,
       meeting_at,
       duration_minutes: duration_minutes ? Number(duration_minutes) : null,
-      meeting_status,
       meeting_outcome,
       budget_discussed: budget_discussed || null,
       deadline: deadline || null,
       notes: notes || null,
       requirements_discussed: requirements_discussed || null,
+      link_url: link_url || null,
       created_by: req.user.id,
       updated_by: req.user.id,
     })
@@ -144,6 +145,76 @@ app.get("/api/meetings/:id", requireAuth, async (req, res) => {
   if (!req.isAdmin && data.created_by !== req.user.id) {
     return res.status(403).json({ error: "Forbidden" });
   }
+  res.json(data);
+});
+
+// Update a meeting: only the owner or an admin may edit it.
+app.put("/api/meetings/:id", requireAuth, async (req, res) => {
+  const { data: existing, error: findError } = await supabase
+    .from("meetings")
+    .select("created_by")
+    .eq("id", req.params.id)
+    .single();
+
+  if (findError || !existing) return res.status(404).json({ error: "Meeting not found" });
+  if (!req.isAdmin && existing.created_by !== req.user.id) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const {
+    project_name,
+    client_name,
+    employee_name,
+    project_type,
+    upwork_account,
+    job_description,
+    meeting_at,
+    duration_minutes,
+    meeting_outcome,
+    budget_discussed,
+    deadline,
+    notes,
+    requirements_discussed,
+    link_url,
+  } = req.body;
+
+  if (
+    !project_name ||
+    !client_name ||
+    !employee_name ||
+    !meeting_at ||
+    !meeting_outcome
+  ) {
+    return res.status(400).json({
+      error:
+        "project_name, client_name, employee_name, meeting_at and meeting_outcome are required",
+    });
+  }
+
+  const { data, error } = await supabase
+    .from("meetings")
+    .update({
+      project_name,
+      client_name,
+      employee_name,
+      project_type: project_type || null,
+      upwork_account: upwork_account || null,
+      job_description: job_description || null,
+      meeting_at,
+      duration_minutes: duration_minutes ? Number(duration_minutes) : null,
+      meeting_outcome,
+      budget_discussed: budget_discussed || null,
+      deadline: deadline || null,
+      notes: notes || null,
+      requirements_discussed: requirements_discussed || null,
+      link_url: link_url || null,
+      updated_by: req.user.id,
+    })
+    .eq("id", req.params.id)
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
   res.json(data);
 });
 
