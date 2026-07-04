@@ -62,7 +62,9 @@ app.get("/api/dashboard/stats", async (req, res) => {
 app.get("/api/meetings", requireAuth, async (req, res) => {
   let query = supabase
     .from("meetings")
-    .select("id, project_name, client_name, title, meeting_at, meeting_type, follow_up_needed")
+    .select(
+      "id, project_name, client_name, employee_name, project_type, meeting_at, meeting_status, meeting_outcome",
+    )
     .order("meeting_at", { ascending: false });
 
   if (!req.isAdmin) query = query.eq("created_by", req.user.id);
@@ -77,38 +79,51 @@ app.post("/api/meetings", requireAuth, async (req, res) => {
   const {
     project_name,
     client_name,
-    title,
+    employee_name,
+    project_type,
+    job_description,
     meeting_at,
-    notes,
-    attendees,
-    outcome,
-    action_items,
     duration_minutes,
-    meeting_type,
-    follow_up_needed,
-    attachment_url,
+    meeting_status,
+    meeting_outcome,
+    budget_discussed,
+    deadline,
+    notes,
+    requirements_discussed,
   } = req.body;
 
-  if (!project_name || !title || !meeting_at) {
-    return res.status(400).json({ error: "project_name, title and meeting_at are required" });
+  if (
+    !project_name ||
+    !client_name ||
+    !employee_name ||
+    !meeting_at ||
+    !meeting_status ||
+    !meeting_outcome
+  ) {
+    return res.status(400).json({
+      error:
+        "project_name, client_name, employee_name, meeting_at, meeting_status and meeting_outcome are required",
+    });
   }
 
   const { data, error } = await supabase
     .from("meetings")
     .insert({
       project_name,
-      client_name: client_name || null,
-      title,
+      client_name,
+      employee_name,
+      project_type: project_type || null,
+      job_description: job_description || null,
       meeting_at,
-      notes: notes || null,
-      attendees: attendees || null,
-      outcome: outcome || null,
-      action_items: action_items || null,
       duration_minutes: duration_minutes ? Number(duration_minutes) : null,
-      meeting_type: meeting_type || null,
-      follow_up_needed: Boolean(follow_up_needed),
-      attachment_url: attachment_url || null,
+      meeting_status,
+      meeting_outcome,
+      budget_discussed: budget_discussed || null,
+      deadline: deadline || null,
+      notes: notes || null,
+      requirements_discussed: requirements_discussed || null,
       created_by: req.user.id,
+      updated_by: req.user.id,
     })
     .select()
     .single();
