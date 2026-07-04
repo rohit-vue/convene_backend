@@ -132,6 +132,114 @@ app.get("/api/meetings/:id", requireAuth, async (req, res) => {
   res.json(data);
 });
 
+const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"];
+const PROJECT_PRIORITIES = ["low", "medium", "high"];
+
+// List projects: admins see all, everyone else sees only their own.
+app.get("/api/projects", requireAuth, async (req, res) => {
+  let query = supabase
+    .from("projects")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (!req.isAdmin) query = query.eq("created_by", req.user.id);
+
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// Create a project. created_by is taken from the verified token, not the client.
+app.post("/api/projects", requireAuth, async (req, res) => {
+  const { name, client_name, description, status, priority, start_date, due_date } = req.body;
+
+  if (!name) return res.status(400).json({ error: "name is required" });
+  if (status && !PROJECT_STATUSES.includes(status)) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
+  if (priority && !PROJECT_PRIORITIES.includes(priority)) {
+    return res.status(400).json({ error: "Invalid priority" });
+  }
+
+  const { data, error } = await supabase
+    .from("projects")
+    .insert({
+      name,
+      client_name: client_name || null,
+      description: description || null,
+      status: status || "planning",
+      priority: priority || "medium",
+      start_date: start_date || null,
+      due_date: due_date || null,
+      created_by: req.user.id,
+    })
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(201).json(data);
+});
+
+// Update a project (status and/or details). Only the owner or an admin may edit.
+app.patch("/api/projects/:id", requireAuth, async (req, res) => {
+  const { data: existing, error: findErr } = await supabase
+    .from("projects")
+    .select("created_by")
+    .eq("id", req.params.id)
+    .single();
+
+  if (findErr || !existing) return res.status(404).json({ error: "Project not found" });
+  if (!req.isAdmin && existing.created_by !== req.user.id) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const { name, client_name, description, status, priority, start_date, due_date } = req.body;
+
+  if (status && !PROJECT_STATUSES.includes(status)) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
+  if (priority && !PROJECT_PRIORITIES.includes(priority)) {
+    return res.status(400).json({ error: "Invalid priority" });
+  }
+
+  const updates = { updated_at: new Date().toISOString() };
+  if (name !== undefined) updates.name = name;
+  if (client_name !== undefined) updates.client_name = client_name || null;
+  if (description !== undefined) updates.description = description || null;
+  if (status !== undefined) updates.status = status;
+  if (priority !== undefined) updates.priority = priority;
+  if (start_date !== undefined) updates.start_date = start_date || null;
+  if (due_date !== undefined) updates.due_date = due_date || null;
+
+  const { data, error } = await supabase
+    .from("projects")
+    .update(updates)
+    .eq("id", req.params.id)
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
+});
+
+// Delete a project. Only the owner or an admin may delete.
+app.delete("/api/projects/:id", requireAuth, async (req, res) => {
+  const { data: existing, error: findErr } = await supabase
+    .from("projects")
+    .select("created_by")
+    .eq("id", req.params.id)
+    .single();
+
+  if (findErr || !existing) return res.status(404).json({ error: "Project not found" });
+  if (!req.isAdmin && existing.created_by !== req.user.id) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const { error } = await supabase.from("projects").delete().eq("id", req.params.id);
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(204).end();
+});
+
 app.get("/api/employees", (req, res) => {
   res.json(employees);
 });
