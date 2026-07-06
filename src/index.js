@@ -855,6 +855,61 @@ async function getProjectStatusHistory(projectId) {
   }));
 }
 
+function dailyLogPayload(body, { jobType } = {}) {
+  const trackerMinutes =
+    jobType === "hourly" && body.tracker_minutes != null ? Number(body.tracker_minutes) : 0;
+
+  return {
+    log_date: body.log_date,
+    tasks_done: String(body.tasks_done || "").trim(),
+    tracker_minutes: trackerMinutes,
+  };
+}
+
+function validateDailyLogFields(body, { jobType } = {}) {
+  const errors = [];
+  const { log_date, tasks_done, tracker_minutes } = dailyLogPayload(body, { jobType });
+
+  if (!log_date) errors.push("log_date is required");
+  if (!tasks_done) errors.push("tasks_done is required");
+  if (jobType === "hourly" && (!Number.isFinite(tracker_minutes) || tracker_minutes < 0)) {
+    errors.push("tracker_minutes must be a non-negative number");
+  }
+
+  return errors;
+}
+
+async function getProjectDailyLogs(projectId) {
+  const { data: rows, error } = await supabase
+    .from("project_daily_logs")
+    .select("id, project_id, log_date, tasks_done, tracker_minutes, created_by, updated_by, created_at, updated_at")
+    .eq("project_id", projectId)
+    .order("log_date", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(error.message);
+
+  const userIds = [
+    ...new Set(
+      (rows || []).flatMap((row) => [row.created_by, row.updated_by].filter(Boolean)),
+    ),
+  ];
+  let nameById = {};
+  if (userIds.length) {
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", userIds);
+    nameById = Object.fromEntries((profiles || []).map((p) => [p.id, p.full_name]));
+  }
+
+  return (rows || []).map((row) => ({
+    ...row,
+    logged_by_name: nameById[row.created_by] || null,
+    updated_by_name: nameById[row.updated_by] || null,
+  }));
+}
+
 // List projects: employees see only their own.
 app.get("/api/projects", requireAuth, requireEmployee, async (req, res) => {
   const { data, error } = await supabase
@@ -918,6 +973,83 @@ app.get("/api/projects/:id/status-history", requireAuth, requireEmployee, async 
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Daily work logs for a project.
+app.get("/api/projects/:id/daily-logs", requireAuth, requireEmployee, async (req, res) => {
+  const result = await getProjectForUser(req, req.params.id);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+
+  try {
+    const logs = await getProjectDailyLogs(req.params.id);
+    res.json(logs);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/projects/:id/daily-logs", requireAuth, requireEmployee, async (req, res) => {
+  const result = await getProjectForUser(req, req.params.id);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+
+  const validationErrors = validateDailyLogFields(req.body, { jobType: result.data.job_type });
+  if (validationErrors.length) {
+    return res.status(400).json({ error: validationErrors[0] });
+  }
+
+  const payload = dailyLogPayload(req.body, { jobType: result.data.job_type });
+
+  const { data, error } = await supabase
+    .from("project_daily_logs")
+    .insert({
+      project_id: req.params.id,
+      ...payload,
+      created_by: req.user.id,
+      updated_by: req.user.id,
+    })
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(201).json(data);
+});
+
+app.put("/api/projects/:id/daily-logs/:logId", requireAuth, requireEmployee, async (req, res) => {
+  const result = await getProjectForUser(req, req.params.id);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+
+  const { data: existing, error: findError } = await supabase
+    .from("project_daily_logs")
+    .select("id, project_id, created_by")
+    .eq("id", req.params.logId)
+    .eq("project_id", req.params.id)
+    .single();
+
+  if (findError || !existing) return res.status(404).json({ error: "Daily log not found" });
+  if (existing.created_by !== req.user.id) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const validationErrors = validateDailyLogFields(req.body, { jobType: result.data.job_type });
+  if (validationErrors.length) {
+    return res.status(400).json({ error: validationErrors[0] });
+  }
+
+  const payload = dailyLogPayload(req.body, { jobType: result.data.job_type });
+
+  const { data, error } = await supabase
+    .from("project_daily_logs")
+    .update({
+      ...payload,
+      updated_by: req.user.id,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", req.params.logId)
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
 });
 
 // Change project status (comment required). Updates project and appends timeline entry.
@@ -1086,6 +1218,33 @@ app.get(
     try {
       const history = await getProjectStatusHistory(req.params.projectId);
       res.json(history);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  },
+);
+
+// Admin: daily logs for a project in employee context.
+app.get(
+  "/api/employees/:employeeId/projects/:projectId/daily-logs",
+  requireAuth,
+  requireAdmin,
+  async (req, res) => {
+    const employee = await getEmployeeById(req.params.employeeId);
+    if (!employee) return res.status(404).json({ error: "Employee not found" });
+
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("id")
+      .eq("id", req.params.projectId)
+      .eq("assigned_to", req.params.employeeId)
+      .single();
+
+    if (projectError || !project) return res.status(404).json({ error: "Project not found" });
+
+    try {
+      const logs = await getProjectDailyLogs(req.params.projectId);
+      res.json(logs);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
