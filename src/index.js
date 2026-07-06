@@ -13,16 +13,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
-// Employees remain mock data for now.
-const employees = [
-  { id: 1, name: "Aarav Shah", role: "Frontend Developer", email: "aarav@convene.io", status: "Active" },
-  { id: 2, name: "Priya Nair", role: "Product Manager", email: "priya@convene.io", status: "Active" },
-  { id: 3, name: "Rohan Das", role: "Backend Developer", email: "rohan@convene.io", status: "Away" },
-  { id: 4, name: "Meera Iyer", role: "UX Designer", email: "meera@convene.io", status: "Active" },
-  { id: 5, name: "Kabir Menon", role: "QA Engineer", email: "kabir@convene.io", status: "Away" },
-  { id: 6, name: "Sara Khan", role: "DevOps Engineer", email: "sara@convene.io", status: "Active" },
-];
-
 // Verifies the Supabase JWT sent by the frontend and resolves the user's role.
 async function requireAuth(req, res, next) {
   const token = req.headers.authorization?.replace("Bearer ", "");
@@ -42,17 +32,82 @@ async function requireAuth(req, res, next) {
   next();
 }
 
+async function getEmployeeUsers() {
+  const { data: profiles, error } = await supabase
+    .from("profiles")
+    .select("id, full_name, role")
+    .eq("role", "employee")
+    .order("full_name", { ascending: true });
+
+  if (error) throw new Error(error.message);
+
+  const { data: authData, error: authError } = await supabase.auth.admin.listUsers({
+    perPage: 1000,
+  });
+  if (authError) throw new Error(authError.message);
+
+  const emailById = Object.fromEntries(
+    (authData.users || []).map((u) => [u.id, u.email]),
+  );
+
+  return (profiles || []).map((p) => ({
+    id: p.id,
+    name: p.full_name || emailById[p.id] || "Unknown",
+    email: emailById[p.id] || null,
+    role: p.role,
+  }));
+}
+
+async function getEmployeeById(employeeId) {
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("id, full_name, role")
+    .eq("id", employeeId)
+    .eq("role", "employee")
+    .single();
+
+  if (error || !profile) return null;
+
+  const { data: authData, error: authError } = await supabase.auth.admin.getUserById(employeeId);
+  if (authError) throw new Error(authError.message);
+
+  return {
+    id: profile.id,
+    name: profile.full_name || authData.user?.email || "Unknown",
+    email: authData.user?.email || null,
+    role: profile.role,
+  };
+}
+
+async function resolveEmployeeForMeeting(employeeId) {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, full_name, role")
+    .eq("id", employeeId)
+    .single();
+
+  if (error || !data) return { error: "Employee not found" };
+  if (data.role !== "employee") return { error: "Invalid employee" };
+  return { id: data.id, name: data.full_name || "Unknown" };
+}
+
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", service: "convene-backend" });
 });
 
 app.get("/api/dashboard/stats", async (req, res) => {
-  const { count } = await supabase
+  const { count: meetingsCount } = await supabase
     .from("meetings")
     .select("*", { count: "exact", head: true });
+
+  const { count: employeesCount } = await supabase
+    .from("profiles")
+    .select("*", { count: "exact", head: true })
+    .eq("role", "employee");
+
   res.json({
-    meetings: count ?? 0,
-    employees: employees.length,
+    meetings: meetingsCount ?? 0,
+    employees: employeesCount ?? 0,
     revenue: 84200,
     tasksDone: 76,
   });
@@ -63,7 +118,7 @@ app.get("/api/meetings", requireAuth, async (req, res) => {
   let query = supabase
     .from("meetings")
     .select(
-      "id, project_name, client_name, employee_name, project_type, upwork_account, meeting_at, meeting_outcome",
+      "id, project_name, client_name, employee_id, employee_name, project_type, upwork_account, meeting_at, meeting_outcome",
     )
     .order("meeting_at", { ascending: false });
 
@@ -79,7 +134,7 @@ app.post("/api/meetings", requireAuth, async (req, res) => {
   const {
     project_name,
     client_name,
-    employee_name,
+    employee_id,
     project_type,
     upwork_account,
     job_description,
@@ -96,22 +151,26 @@ app.post("/api/meetings", requireAuth, async (req, res) => {
   if (
     !project_name ||
     !client_name ||
-    !employee_name ||
+    !employee_id ||
     !meeting_at ||
     !meeting_outcome
   ) {
     return res.status(400).json({
       error:
-        "project_name, client_name, employee_name, meeting_at and meeting_outcome are required",
+        "project_name, client_name, employee_id, meeting_at and meeting_outcome are required",
     });
   }
+
+  const employee = await resolveEmployeeForMeeting(employee_id);
+  if (employee.error) return res.status(400).json({ error: employee.error });
 
   const { data, error } = await supabase
     .from("meetings")
     .insert({
       project_name,
       client_name,
-      employee_name,
+      employee_id: employee.id,
+      employee_name: employee.name,
       project_type: project_type || null,
       upwork_account: upwork_account || null,
       job_description: job_description || null,
@@ -164,7 +223,7 @@ app.put("/api/meetings/:id", requireAuth, async (req, res) => {
   const {
     project_name,
     client_name,
-    employee_name,
+    employee_id,
     project_type,
     upwork_account,
     job_description,
@@ -181,22 +240,26 @@ app.put("/api/meetings/:id", requireAuth, async (req, res) => {
   if (
     !project_name ||
     !client_name ||
-    !employee_name ||
+    !employee_id ||
     !meeting_at ||
     !meeting_outcome
   ) {
     return res.status(400).json({
       error:
-        "project_name, client_name, employee_name, meeting_at and meeting_outcome are required",
+        "project_name, client_name, employee_id, meeting_at and meeting_outcome are required",
     });
   }
+
+  const employee = await resolveEmployeeForMeeting(employee_id);
+  if (employee.error) return res.status(400).json({ error: employee.error });
 
   const { data, error } = await supabase
     .from("meetings")
     .update({
       project_name,
       client_name,
-      employee_name,
+      employee_id: employee.id,
+      employee_name: employee.name,
       project_type: project_type || null,
       upwork_account: upwork_account || null,
       job_description: job_description || null,
@@ -220,6 +283,85 @@ app.put("/api/meetings/:id", requireAuth, async (req, res) => {
 
 const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"];
 const PROJECT_PRIORITIES = ["low", "medium", "high"];
+const PROJECT_JOB_TYPES = ["hourly", "contract"];
+const PROJECT_JOB_CATEGORIES = [
+  "web_development",
+  "mobile_development",
+  "ui_ux_design",
+  "wordpress",
+  "ecommerce",
+  "devops",
+  "data_ai",
+  "qa_testing",
+  "other",
+];
+
+function validateProjectFields(body, { partial = false } = {}) {
+  const errors = [];
+  const { status, priority, job_type, job_category } = body;
+
+  if (!partial && !body.name) errors.push("name is required");
+  if (status && !PROJECT_STATUSES.includes(status)) errors.push("Invalid status");
+  if (priority && !PROJECT_PRIORITIES.includes(priority)) errors.push("Invalid priority");
+  if (job_type && !PROJECT_JOB_TYPES.includes(job_type)) errors.push("Invalid job type");
+  if (job_category && !PROJECT_JOB_CATEGORIES.includes(job_category)) errors.push("Invalid job category");
+
+  return errors;
+}
+
+function projectPayload(body, { forInsert = false } = {}) {
+  const fields = {
+    name: body.name,
+    client_name: body.client_name || null,
+    description: body.description || null,
+    status: body.status || "planning",
+    priority: body.priority || "medium",
+    start_date: body.start_date || null,
+    due_date: body.due_date || null,
+    job_description: body.job_description || null,
+    requirements: body.requirements || null,
+    job_category: body.job_category || null,
+    job_type: body.job_type || null,
+    upwork_account: body.upwork_account || null,
+    link_url: body.link_url || null,
+    notes: body.notes || null,
+    assigned_to: body.assigned_to || null,
+  };
+
+  if (forInsert) return fields;
+
+  const updates = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (key === "status") continue;
+    if (body[key] !== undefined) updates[key] = value;
+  }
+  return updates;
+}
+
+async function getProjectForUser(req, projectId) {
+  const { data, error } = await supabase
+    .from("projects")
+    .select("*")
+    .eq("id", projectId)
+    .single();
+
+  if (error || !data) return { error: "Project not found", status: 404 };
+  if (!req.isAdmin && data.created_by !== req.user.id) {
+    return { error: "Forbidden", status: 403 };
+  }
+  return { data };
+}
+
+async function insertStatusHistory({ projectId, fromStatus, toStatus, comment, changedBy }) {
+  const { error } = await supabase.from("project_status_history").insert({
+    project_id: projectId,
+    from_status: fromStatus,
+    to_status: toStatus,
+    comment,
+    changed_by: changedBy,
+  });
+  if (error) throw new Error(error.message);
+}
 
 // List projects: admins see all, everyone else sees only their own.
 app.get("/api/projects", requireAuth, async (req, res) => {
@@ -237,36 +379,123 @@ app.get("/api/projects", requireAuth, async (req, res) => {
 
 // Create a project. created_by is taken from the verified token, not the client.
 app.post("/api/projects", requireAuth, async (req, res) => {
-  const { name, client_name, description, status, priority, start_date, due_date } = req.body;
-
-  if (!name) return res.status(400).json({ error: "name is required" });
-  if (status && !PROJECT_STATUSES.includes(status)) {
-    return res.status(400).json({ error: "Invalid status" });
-  }
-  if (priority && !PROJECT_PRIORITIES.includes(priority)) {
-    return res.status(400).json({ error: "Invalid priority" });
+  const validationErrors = validateProjectFields(req.body);
+  if (validationErrors.length) {
+    return res.status(400).json({ error: validationErrors[0] });
   }
 
   const { data, error } = await supabase
     .from("projects")
     .insert({
-      name,
-      client_name: client_name || null,
-      description: description || null,
-      status: status || "planning",
-      priority: priority || "medium",
-      start_date: start_date || null,
-      due_date: due_date || null,
+      ...projectPayload(req.body, { forInsert: true }),
       created_by: req.user.id,
+      assigned_to: req.body.assigned_to || req.user.id,
     })
     .select()
     .single();
 
   if (error) return res.status(400).json({ error: error.message });
+
+  try {
+    await insertStatusHistory({
+      projectId: data.id,
+      fromStatus: null,
+      toStatus: data.status,
+      comment: "Project created",
+      changedBy: req.user.id,
+    });
+  } catch (historyErr) {
+    return res.status(500).json({ error: historyErr.message });
+  }
+
   res.status(201).json(data);
 });
 
-// Update a project (status and/or details). Only the owner or an admin may edit.
+// Fetch a single project. Only the owner or an admin may view it.
+app.get("/api/projects/:id", requireAuth, async (req, res) => {
+  const result = await getProjectForUser(req, req.params.id);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+  res.json(result.data);
+});
+
+// Status change history for a project.
+app.get("/api/projects/:id/status-history", requireAuth, async (req, res) => {
+  const result = await getProjectForUser(req, req.params.id);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+
+  const { data: rows, error } = await supabase
+    .from("project_status_history")
+    .select("id, from_status, to_status, comment, changed_by, created_at")
+    .eq("project_id", req.params.id)
+    .order("created_at", { ascending: false });
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const userIds = [...new Set((rows || []).map((row) => row.changed_by))];
+  let nameById = {};
+  if (userIds.length) {
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", userIds);
+    nameById = Object.fromEntries((profiles || []).map((p) => [p.id, p.full_name]));
+  }
+
+  res.json(
+    (rows || []).map((row) => ({
+      ...row,
+      changed_by_name: nameById[row.changed_by] || null,
+    })),
+  );
+});
+
+// Change project status (comment required). Updates project and appends timeline entry.
+app.post("/api/projects/:id/status", requireAuth, async (req, res) => {
+  const result = await getProjectForUser(req, req.params.id);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+
+  const { status, comment } = req.body;
+  if (!status || !PROJECT_STATUSES.includes(status)) {
+    return res.status(400).json({ error: "Valid status is required" });
+  }
+  if (!comment || !String(comment).trim()) {
+    return res.status(400).json({ error: "Comment is required to change status" });
+  }
+  if (status === result.data.status) {
+    return res.status(400).json({ error: "Status is already set to this value" });
+  }
+
+  const fromStatus = result.data.status;
+
+  const { data, error } = await supabase
+    .from("projects")
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq("id", req.params.id)
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+
+  try {
+    await insertStatusHistory({
+      projectId: req.params.id,
+      fromStatus,
+      toStatus: status,
+      comment: String(comment).trim(),
+      changedBy: req.user.id,
+    });
+  } catch (historyErr) {
+    await supabase
+      .from("projects")
+      .update({ status: fromStatus, updated_at: new Date().toISOString() })
+      .eq("id", req.params.id);
+    return res.status(500).json({ error: historyErr.message });
+  }
+
+  res.json(data);
+});
+
+// Update a project details (not status). Only the owner or an admin may edit.
 app.patch("/api/projects/:id", requireAuth, async (req, res) => {
   const { data: existing, error: findErr } = await supabase
     .from("projects")
@@ -279,23 +508,21 @@ app.patch("/api/projects/:id", requireAuth, async (req, res) => {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  const { name, client_name, description, status, priority, start_date, due_date } = req.body;
-
-  if (status && !PROJECT_STATUSES.includes(status)) {
-    return res.status(400).json({ error: "Invalid status" });
-  }
-  if (priority && !PROJECT_PRIORITIES.includes(priority)) {
-    return res.status(400).json({ error: "Invalid priority" });
+  if (req.body.status !== undefined) {
+    return res.status(400).json({
+      error: "Use POST /api/projects/:id/status to change status with a comment",
+    });
   }
 
-  const updates = { updated_at: new Date().toISOString() };
-  if (name !== undefined) updates.name = name;
-  if (client_name !== undefined) updates.client_name = client_name || null;
-  if (description !== undefined) updates.description = description || null;
-  if (status !== undefined) updates.status = status;
-  if (priority !== undefined) updates.priority = priority;
-  if (start_date !== undefined) updates.start_date = start_date || null;
-  if (due_date !== undefined) updates.due_date = due_date || null;
+  const validationErrors = validateProjectFields(req.body, { partial: true });
+  if (validationErrors.length) {
+    return res.status(400).json({ error: validationErrors[0] });
+  }
+
+  const updates = {
+    ...projectPayload(req.body),
+    updated_at: new Date().toISOString(),
+  };
 
   const { data, error } = await supabase
     .from("projects")
@@ -326,8 +553,46 @@ app.delete("/api/projects/:id", requireAuth, async (req, res) => {
   res.status(204).end();
 });
 
-app.get("/api/employees", (req, res) => {
-  res.json(employees);
+app.get("/api/employees/:id", requireAuth, async (req, res) => {
+  try {
+    const employee = await getEmployeeById(req.params.id);
+    if (!employee) return res.status(404).json({ error: "Employee not found" });
+
+    const { data: meetings, error: meetingsError } = await supabase
+      .from("meetings")
+      .select(
+        "id, project_name, client_name, meeting_at, meeting_outcome, project_type",
+      )
+      .eq("employee_id", req.params.id)
+      .order("meeting_at", { ascending: false });
+
+    if (meetingsError) return res.status(500).json({ error: meetingsError.message });
+
+    const { data: projects, error: projectsError } = await supabase
+      .from("projects")
+      .select("id, name, client_name, status, start_date, created_at")
+      .eq("assigned_to", req.params.id)
+      .order("created_at", { ascending: false });
+
+    if (projectsError) return res.status(500).json({ error: projectsError.message });
+
+    res.json({
+      ...employee,
+      meetings: meetings || [],
+      projects: projects || [],
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/employees", requireAuth, async (req, res) => {
+  try {
+    const employees = await getEmployeeUsers();
+    res.json(employees);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 const PORT = process.env.PORT || 4000;
