@@ -91,6 +91,114 @@ async function resolveEmployeeForMeeting(employeeId) {
   return { id: data.id, name: data.full_name || "Unknown" };
 }
 
+async function getMeetingForUser(req, meetingId) {
+  const { data, error } = await supabase
+    .from("meetings")
+    .select("*")
+    .eq("id", meetingId)
+    .single();
+
+  if (error || !data) return { error: "Meeting not found", status: 404 };
+  if (!req.isAdmin && data.created_by !== req.user.id) {
+    return { error: "Forbidden", status: 403 };
+  }
+  return { data };
+}
+
+async function getLatestUpdatesByMeetingIds(meetingIds) {
+  if (!meetingIds.length) return {};
+
+  const { data, error } = await supabase
+    .from("meeting_updates")
+    .select("*")
+    .in("meeting_id", meetingIds)
+    .order("meeting_at", { ascending: false });
+
+  if (error) throw new Error(error.message);
+
+  const latestByMeetingId = {};
+  for (const row of data || []) {
+    if (!latestByMeetingId[row.meeting_id]) latestByMeetingId[row.meeting_id] = row;
+  }
+  return latestByMeetingId;
+}
+
+function enrichMeetingWithLatest(meeting, latestUpdate) {
+  return {
+    ...meeting,
+    meeting_at: latestUpdate?.meeting_at ?? meeting.meeting_at ?? null,
+    meeting_outcome: latestUpdate?.meeting_outcome ?? meeting.meeting_outcome ?? null,
+    latest_update_id: latestUpdate?.id ?? null,
+  };
+}
+
+async function getEmployeeNamesByIds(employeeIds) {
+  const ids = [...new Set(employeeIds.filter(Boolean))];
+  if (!ids.length) return {};
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, full_name")
+    .in("id", ids);
+
+  if (error) throw new Error(error.message);
+  return Object.fromEntries((data || []).map((p) => [p.id, p.full_name || "Unknown"]));
+}
+
+function enrichMeetingWithEmployee(meeting, nameById) {
+  if (!meeting) return meeting;
+  return {
+    ...meeting,
+    employee_name: meeting.employee_id ? nameById[meeting.employee_id] || null : null,
+  };
+}
+
+async function enrichMeetings(meetings, { withLatest = false } = {}) {
+  const rows = meetings || [];
+  const nameById = await getEmployeeNamesByIds(rows.map((m) => m.employee_id));
+
+  if (!withLatest) {
+    return rows.map((m) => enrichMeetingWithEmployee(m, nameById));
+  }
+
+  const latestById = await getLatestUpdatesByMeetingIds(rows.map((m) => m.id));
+  return rows.map((m) =>
+    enrichMeetingWithEmployee(enrichMeetingWithLatest(m, latestById[m.id]), nameById),
+  );
+}
+
+function meetingUpdatePayload(body) {
+  return {
+    meeting_at: body.meeting_at,
+    duration_minutes: body.duration_minutes ? Number(body.duration_minutes) : null,
+    meeting_outcome: body.meeting_outcome,
+    budget_discussed: body.budget_discussed || null,
+    deadline: body.deadline || null,
+    notes: body.notes || null,
+    requirements_discussed: body.requirements_discussed || null,
+  };
+}
+
+async function syncParentMeetingFromLatestUpdate(meetingId, updatedBy) {
+  const latestById = await getLatestUpdatesByMeetingIds([meetingId]);
+  const latest = latestById[meetingId];
+  if (!latest) return;
+
+  await supabase
+    .from("meetings")
+    .update({
+      meeting_at: latest.meeting_at,
+      duration_minutes: latest.duration_minutes,
+      meeting_outcome: latest.meeting_outcome,
+      budget_discussed: latest.budget_discussed,
+      deadline: latest.deadline,
+      notes: latest.notes,
+      requirements_discussed: latest.requirements_discussed,
+      updated_by: updatedBy,
+    })
+    .eq("id", meetingId);
+}
+
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", service: "convene-backend" });
 });
@@ -113,28 +221,37 @@ app.get("/api/dashboard/stats", async (req, res) => {
   });
 });
 
-// List meetings: admins see all, everyone else sees only their own.
+// List meetings: parent meetings only, with latest update snapshot for the table.
 app.get("/api/meetings", requireAuth, async (req, res) => {
-  let query = supabase
-    .from("meetings")
-    .select(
-      "id, project_name, client_name, employee_id, employee_name, project_type, upwork_account, meeting_at, meeting_outcome",
-    )
-    .order("meeting_at", { ascending: false });
+  try {
+    let query = supabase
+      .from("meetings")
+      .select(
+        "id, project_name, client_name, employee_id, project_type, upwork_account, created_at",
+      )
+      .order("created_at", { ascending: false });
 
-  if (!req.isAdmin) query = query.eq("created_by", req.user.id);
+    if (!req.isAdmin) query = query.eq("created_by", req.user.id);
 
-  const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+    const { data: meetings, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+
+    const enriched = await enrichMeetings(meetings, { withLatest: true });
+    enriched.sort(
+      (a, b) => new Date(b.meeting_at || b.created_at) - new Date(a.meeting_at || a.created_at),
+    );
+
+    res.json(enriched);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// Create a meeting. created_by is taken from the verified token, not the client.
+// Create a parent meeting + its first logistics update.
 app.post("/api/meetings", requireAuth, async (req, res) => {
   const {
     project_name,
     client_name,
-    employee_id,
     project_type,
     upwork_account,
     job_description,
@@ -148,32 +265,32 @@ app.post("/api/meetings", requireAuth, async (req, res) => {
     link_url,
   } = req.body;
 
-  if (
-    !project_name ||
-    !client_name ||
-    !employee_id ||
-    !meeting_at ||
-    !meeting_outcome
-  ) {
+  if (!project_name || !client_name || !meeting_at || !meeting_outcome) {
     return res.status(400).json({
-      error:
-        "project_name, client_name, employee_id, meeting_at and meeting_outcome are required",
+      error: "project_name, client_name, meeting_at and meeting_outcome are required",
     });
   }
 
-  const employee = await resolveEmployeeForMeeting(employee_id);
-  if (employee.error) return res.status(400).json({ error: employee.error });
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("id", req.user.id)
+    .single();
 
-  const { data, error } = await supabase
+  if (profileError || !profile) {
+    return res.status(400).json({ error: "User profile not found" });
+  }
+
+  const { data: meeting, error: meetingError } = await supabase
     .from("meetings")
     .insert({
       project_name,
       client_name,
-      employee_id: employee.id,
-      employee_name: employee.name,
+      employee_id: profile.id,
       project_type: project_type || null,
       upwork_account: upwork_account || null,
       job_description: job_description || null,
+      link_url: link_url || null,
       meeting_at,
       duration_minutes: duration_minutes ? Number(duration_minutes) : null,
       meeting_outcome,
@@ -181,7 +298,76 @@ app.post("/api/meetings", requireAuth, async (req, res) => {
       deadline: deadline || null,
       notes: notes || null,
       requirements_discussed: requirements_discussed || null,
-      link_url: link_url || null,
+      created_by: req.user.id,
+      updated_by: req.user.id,
+    })
+    .select()
+    .single();
+
+  if (meetingError) return res.status(400).json({ error: meetingError.message });
+
+  const { data: update, error: updateError } = await supabase
+    .from("meeting_updates")
+    .insert({
+      meeting_id: meeting.id,
+      ...meetingUpdatePayload({
+        meeting_at,
+        duration_minutes,
+        meeting_outcome,
+        budget_discussed,
+        deadline,
+        notes,
+        requirements_discussed,
+      }),
+      created_by: req.user.id,
+      updated_by: req.user.id,
+    })
+    .select()
+    .single();
+
+  if (updateError) {
+    await supabase.from("meetings").delete().eq("id", meeting.id);
+    return res.status(400).json({ error: updateError.message });
+  }
+
+  await syncParentMeetingFromLatestUpdate(meeting.id, req.user.id);
+
+  const [enriched] = await enrichMeetings([enrichMeetingWithLatest(meeting, update)], {
+    withLatest: false,
+  });
+  res.status(201).json(enriched);
+});
+
+// Timeline: all logistics updates for a meeting.
+app.get("/api/meetings/:id/updates", requireAuth, async (req, res) => {
+  const result = await getMeetingForUser(req, req.params.id);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+
+  const { data, error } = await supabase
+    .from("meeting_updates")
+    .select("*")
+    .eq("meeting_id", req.params.id)
+    .order("meeting_at", { ascending: false });
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+// Create a new logistics update (follow-up) for an existing meeting.
+app.post("/api/meetings/:id/updates", requireAuth, async (req, res) => {
+  const result = await getMeetingForUser(req, req.params.id);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+
+  const { meeting_at, meeting_outcome } = req.body;
+  if (!meeting_at || !meeting_outcome) {
+    return res.status(400).json({ error: "meeting_at and meeting_outcome are required" });
+  }
+
+  const { data, error } = await supabase
+    .from("meeting_updates")
+    .insert({
+      meeting_id: req.params.id,
+      ...meetingUpdatePayload(req.body),
       created_by: req.user.id,
       updated_by: req.user.id,
     })
@@ -189,87 +375,87 @@ app.post("/api/meetings", requireAuth, async (req, res) => {
     .single();
 
   if (error) return res.status(400).json({ error: error.message });
+
+  await syncParentMeetingFromLatestUpdate(req.params.id, req.user.id);
+
   res.status(201).json(data);
 });
 
-// Meeting detail: only the owner or an admin may view it.
-app.get("/api/meetings/:id", requireAuth, async (req, res) => {
-  const { data, error } = await supabase
-    .from("meetings")
-    .select("*")
-    .eq("id", req.params.id)
+// Update a single logistics entry.
+app.put("/api/meetings/:id/updates/:updateId", requireAuth, async (req, res) => {
+  const result = await getMeetingForUser(req, req.params.id);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+
+  const { data: existing, error: findError } = await supabase
+    .from("meeting_updates")
+    .select("id, meeting_id")
+    .eq("id", req.params.updateId)
+    .eq("meeting_id", req.params.id)
     .single();
 
-  if (error || !data) return res.status(404).json({ error: "Meeting not found" });
-  if (!req.isAdmin && data.created_by !== req.user.id) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
+  if (findError || !existing) return res.status(404).json({ error: "Meeting update not found" });
+
+  const { meeting_at, meeting_outcome } = req.body;
+  if (!meeting_at) return res.status(400).json({ error: "meeting_at is required" });
+  if (!meeting_outcome) return res.status(400).json({ error: "meeting_outcome is required" });
+
+  const { data, error } = await supabase
+    .from("meeting_updates")
+    .update({
+      ...meetingUpdatePayload(req.body),
+      updated_by: req.user.id,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", req.params.updateId)
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+
+  await syncParentMeetingFromLatestUpdate(req.params.id, req.user.id);
+
   res.json(data);
 });
 
-// Update a meeting: only the owner or an admin may edit it.
-app.put("/api/meetings/:id", requireAuth, async (req, res) => {
-  const { data: existing, error: findError } = await supabase
-    .from("meetings")
-    .select("created_by")
-    .eq("id", req.params.id)
-    .single();
+// Meeting detail: parent meeting with latest update snapshot.
+app.get("/api/meetings/:id", requireAuth, async (req, res) => {
+  const result = await getMeetingForUser(req, req.params.id);
+  if (result.error) return res.status(result.status).json({ error: result.error });
 
-  if (findError || !existing) return res.status(404).json({ error: "Meeting not found" });
-  if (!req.isAdmin && existing.created_by !== req.user.id) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
+  const latestById = await getLatestUpdatesByMeetingIds([req.params.id]);
+  const [enriched] = await enrichMeetings(
+    [enrichMeetingWithLatest(result.data, latestById[req.params.id])],
+    { withLatest: false },
+  );
+  res.json(enriched);
+});
+
+// Update parent meeting project/account fields only.
+app.put("/api/meetings/:id", requireAuth, async (req, res) => {
+  const result = await getMeetingForUser(req, req.params.id);
+  if (result.error) return res.status(result.status).json({ error: result.error });
 
   const {
     project_name,
     client_name,
-    employee_id,
     project_type,
     upwork_account,
     job_description,
-    meeting_at,
-    duration_minutes,
-    meeting_outcome,
-    budget_discussed,
-    deadline,
-    notes,
-    requirements_discussed,
     link_url,
   } = req.body;
 
-  if (
-    !project_name ||
-    !client_name ||
-    !employee_id ||
-    !meeting_at ||
-    !meeting_outcome
-  ) {
-    return res.status(400).json({
-      error:
-        "project_name, client_name, employee_id, meeting_at and meeting_outcome are required",
-    });
+  if (!project_name || !client_name) {
+    return res.status(400).json({ error: "project_name and client_name are required" });
   }
-
-  const employee = await resolveEmployeeForMeeting(employee_id);
-  if (employee.error) return res.status(400).json({ error: employee.error });
 
   const { data, error } = await supabase
     .from("meetings")
     .update({
       project_name,
       client_name,
-      employee_id: employee.id,
-      employee_name: employee.name,
       project_type: project_type || null,
       upwork_account: upwork_account || null,
       job_description: job_description || null,
-      meeting_at,
-      duration_minutes: duration_minutes ? Number(duration_minutes) : null,
-      meeting_outcome,
-      budget_discussed: budget_discussed || null,
-      deadline: deadline || null,
-      notes: notes || null,
-      requirements_discussed: requirements_discussed || null,
       link_url: link_url || null,
       updated_by: req.user.id,
     })
@@ -278,7 +464,13 @@ app.put("/api/meetings/:id", requireAuth, async (req, res) => {
     .single();
 
   if (error) return res.status(400).json({ error: error.message });
-  res.json(data);
+
+  const latestById = await getLatestUpdatesByMeetingIds([req.params.id]);
+  const [enriched] = await enrichMeetings(
+    [enrichMeetingWithLatest(data, latestById[req.params.id])],
+    { withLatest: false },
+  );
+  res.json(enriched);
 });
 
 const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"];
@@ -560,13 +752,16 @@ app.get("/api/employees/:id", requireAuth, async (req, res) => {
 
     const { data: meetings, error: meetingsError } = await supabase
       .from("meetings")
-      .select(
-        "id, project_name, client_name, meeting_at, meeting_outcome, project_type",
-      )
+      .select("id, project_name, client_name, project_type, created_at")
       .eq("employee_id", req.params.id)
-      .order("meeting_at", { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (meetingsError) return res.status(500).json({ error: meetingsError.message });
+
+    const enrichedMeetings = await enrichMeetings(meetings, { withLatest: true });
+    enrichedMeetings.sort(
+      (a, b) => new Date(b.meeting_at || b.created_at) - new Date(a.meeting_at || a.created_at),
+    );
 
     const { data: projects, error: projectsError } = await supabase
       .from("projects")
@@ -578,7 +773,7 @@ app.get("/api/employees/:id", requireAuth, async (req, res) => {
 
     res.json({
       ...employee,
-      meetings: meetings || [],
+      meetings: enrichedMeetings,
       projects: projects || [],
     });
   } catch (e) {
