@@ -28,7 +28,18 @@ async function requireAuth(req, res, next) {
     .single();
 
   req.user = data.user;
+  req.role = profile?.role ?? null;
   req.isAdmin = profile?.role === "admin";
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.isAdmin) return res.status(403).json({ error: "Admin access required" });
+  next();
+}
+
+function requireEmployee(req, res, next) {
+  if (req.role !== "employee") return res.status(403).json({ error: "Employee access required" });
   next();
 }
 
@@ -95,42 +106,313 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", service: "convene-backend" });
 });
 
-app.get("/api/dashboard/stats", async (req, res) => {
-  const { count: meetingsCount } = await supabase
-    .from("meetings")
-    .select("*", { count: "exact", head: true });
+app.get("/api/dashboard/stats", requireAuth, async (req, res) => {
+  let meetingsQuery = supabase.from("meetings").select("*", { count: "exact", head: true });
+  let projectsQuery = supabase.from("projects").select("*", { count: "exact", head: true });
 
-  const { count: employeesCount } = await supabase
-    .from("profiles")
-    .select("*", { count: "exact", head: true })
-    .eq("role", "employee");
+  if (!req.isAdmin) {
+    meetingsQuery = meetingsQuery.eq("created_by", req.user.id);
+    projectsQuery = projectsQuery.eq("created_by", req.user.id);
+  }
 
-  res.json({
+  const [{ count: meetingsCount }, { count: projectsCount }] = await Promise.all([
+    meetingsQuery,
+    projectsQuery,
+  ]);
+
+  const payload = {
     meetings: meetingsCount ?? 0,
-    employees: employeesCount ?? 0,
-    revenue: 84200,
-    tasksDone: 76,
-  });
+    projects: projectsCount ?? 0,
+  };
+
+  if (req.isAdmin) {
+    const { count: employeesCount } = await supabase
+      .from("profiles")
+      .select("*", { count: "exact", head: true })
+      .eq("role", "employee");
+    payload.employees = employeesCount ?? 0;
+  }
+
+  res.json(payload);
 });
 
-// List meetings: admins see all, everyone else sees only their own.
-app.get("/api/meetings", requireAuth, async (req, res) => {
-  let query = supabase
+const STATUS_LABELS = {
+  planning: "Planning",
+  active: "Active",
+  on_hold: "On hold",
+  completed: "Completed",
+  cancelled: "Cancelled",
+};
+
+const PROJECT_STATUS_KEYS = ["planning", "active", "on_hold", "completed", "cancelled"];
+const MEETING_OUTCOME_KEYS = [
+  "won",
+  "holding",
+  "not_selected",
+  "follow_up_required",
+  "pending_reply",
+];
+const FOLLOW_UP_OUTCOMES = ["follow_up_required", "pending_reply"];
+
+function statusLabel(status) {
+  return STATUS_LABELS[status] || status || "Unknown";
+}
+
+function emptyBreakdown(keys) {
+  return Object.fromEntries(keys.map((k) => [k, 0]));
+}
+
+function countByField(rows, field, keys) {
+  const counts = emptyBreakdown(keys);
+  for (const row of rows || []) {
+    const value = row[field];
+    if (value && counts[value] !== undefined) counts[value]++;
+  }
+  return counts;
+}
+
+function scopeMeetings(req, columns) {
+  let q = supabase.from("meetings").select(columns);
+  if (!req.isAdmin) q = q.eq("created_by", req.user.id);
+  return q;
+}
+
+function scopeProjects(req, columns) {
+  let q = supabase.from("projects").select(columns);
+  if (!req.isAdmin) q = q.eq("created_by", req.user.id);
+  return q;
+}
+
+app.get("/api/dashboard/overview", requireAuth, async (req, res) => {
+  try {
+    const [
+      { data: allMeetings, error: meetingsError },
+      { data: allProjects, error: projectsError },
+    ] = await Promise.all([
+      scopeMeetings(
+        req,
+        "id, project_name, client_name, employee_id, meeting_at, meeting_outcome, created_at",
+      ),
+      scopeProjects(req, "id, name, client_name, status, start_date, assigned_to, created_at"),
+    ]);
+
+    if (meetingsError) throw new Error(meetingsError.message);
+    if (projectsError) throw new Error(projectsError.message);
+
+    const meetings = allMeetings || [];
+    const projects = allProjects || [];
+
+    const projectStatusBreakdown = countByField(projects, "status", PROJECT_STATUS_KEYS);
+    const meetingOutcomeBreakdown = countByField(meetings, "meeting_outcome", MEETING_OUTCOME_KEYS);
+
+    let needsAttentionCount = 0;
+    for (const m of meetings) {
+      if (FOLLOW_UP_OUTCOMES.includes(m.meeting_outcome)) needsAttentionCount++;
+    }
+    for (const p of projects) {
+      if (p.status === "on_hold") needsAttentionCount++;
+    }
+
+    const stats = {
+      meetings: meetings.length,
+      projects: projects.length,
+      needsAttention: needsAttentionCount,
+    };
+
+    if (req.isAdmin) {
+      const { count: employeesCount } = await supabase
+        .from("profiles")
+        .select("*", { count: "exact", head: true })
+        .eq("role", "employee");
+      stats.employees = employeesCount ?? 0;
+    }
+
+    const projectNameById = Object.fromEntries(projects.map((p) => [p.id, p.name]));
+
+    let historyRows = [];
+    if (req.isAdmin) {
+      const { data: history, error: historyError } = await supabase
+        .from("project_status_history")
+        .select("id, project_id, from_status, to_status, comment, created_at")
+        .order("created_at", { ascending: false })
+        .limit(10);
+      if (historyError) throw new Error(historyError.message);
+      historyRows = history || [];
+
+      const missingIds = [...new Set(historyRows.map((r) => r.project_id))].filter(
+        (id) => !projectNameById[id],
+      );
+      if (missingIds.length) {
+        const { data: namedProjects } = await supabase
+          .from("projects")
+          .select("id, name")
+          .in("id", missingIds);
+        for (const p of namedProjects || []) {
+          projectNameById[p.id] = p.name;
+        }
+      }
+    } else {
+      const projectIds = projects.map((p) => p.id);
+      if (projectIds.length) {
+        const { data: history, error: historyError } = await supabase
+          .from("project_status_history")
+          .select("id, project_id, from_status, to_status, comment, created_at")
+          .in("project_id", projectIds)
+          .order("created_at", { ascending: false })
+          .limit(10);
+        if (historyError) throw new Error(historyError.message);
+        historyRows = history || [];
+      }
+    }
+
+    const activityItems = [];
+
+    for (const m of meetings.slice(0, 10)) {
+      activityItems.push({
+        at: m.meeting_at || m.created_at,
+        text: `Meeting for ${m.project_name}${m.client_name ? ` with ${m.client_name}` : ""}`,
+      });
+    }
+
+    for (const p of projects.slice(0, 10)) {
+      activityItems.push({
+        at: p.created_at,
+        text: `Project ${p.name} was created`,
+      });
+    }
+
+    for (const h of historyRows) {
+      const name = projectNameById[h.project_id] || "Project";
+      activityItems.push({
+        at: h.created_at,
+        text: `${name} updated to ${statusLabel(h.to_status)}`,
+      });
+    }
+
+    activityItems.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
+    res.json({
+      stats,
+      projectStatusBreakdown,
+      meetingOutcomeBreakdown,
+      activity: activityItems.slice(0, 8),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/dashboard/activity", requireAuth, async (req, res) => {
+  try {
+    let meetingsQuery = supabase
+      .from("meetings")
+      .select("id, project_name, client_name, meeting_at, created_at")
+      .order("meeting_at", { ascending: false })
+      .limit(10);
+
+    let projectsQuery = supabase
+      .from("projects")
+      .select("id, name, status, created_at")
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    if (!req.isAdmin) {
+      meetingsQuery = meetingsQuery.eq("created_by", req.user.id);
+      projectsQuery = projectsQuery.eq("created_by", req.user.id);
+    }
+
+    const [{ data: meetings }, { data: projects }] = await Promise.all([
+      meetingsQuery,
+      projectsQuery,
+    ]);
+
+    const projectNameById = Object.fromEntries((projects || []).map((p) => [p.id, p.name]));
+
+    let historyRows = [];
+    if (req.isAdmin) {
+      const { data: history, error: historyError } = await supabase
+        .from("project_status_history")
+        .select("id, project_id, from_status, to_status, comment, created_at")
+        .order("created_at", { ascending: false })
+        .limit(10);
+
+      if (historyError) throw new Error(historyError.message);
+      historyRows = history || [];
+
+      const missingIds = [...new Set(historyRows.map((r) => r.project_id))].filter(
+        (id) => !projectNameById[id],
+      );
+      if (missingIds.length) {
+        const { data: namedProjects } = await supabase
+          .from("projects")
+          .select("id, name")
+          .in("id", missingIds);
+        for (const p of namedProjects || []) {
+          projectNameById[p.id] = p.name;
+        }
+      }
+    } else {
+      const projectIds = (projects || []).map((p) => p.id);
+      if (projectIds.length) {
+        const { data: history, error: historyError } = await supabase
+          .from("project_status_history")
+          .select("id, project_id, from_status, to_status, comment, created_at")
+          .in("project_id", projectIds)
+          .order("created_at", { ascending: false })
+          .limit(10);
+
+        if (historyError) throw new Error(historyError.message);
+        historyRows = history || [];
+      }
+    }
+
+    const items = [];
+
+    for (const m of meetings || []) {
+      items.push({
+        at: m.meeting_at || m.created_at,
+        text: `Meeting for ${m.project_name}${m.client_name ? ` with ${m.client_name}` : ""}`,
+      });
+    }
+
+    for (const p of projects || []) {
+      items.push({
+        at: p.created_at,
+        text: `Project ${p.name} was created`,
+      });
+    }
+
+    for (const h of historyRows) {
+      const name = projectNameById[h.project_id] || "Project";
+      items.push({
+        at: h.created_at,
+        text: `${name} updated to ${statusLabel(h.to_status)}`,
+      });
+    }
+
+    items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
+    res.json(items.slice(0, 8));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// List meetings: employees see only their own.
+app.get("/api/meetings", requireAuth, requireEmployee, async (req, res) => {
+  const { data, error } = await supabase
     .from("meetings")
     .select(
       "id, project_name, client_name, employee_id, employee_name, project_type, upwork_account, meeting_at, meeting_outcome",
     )
+    .eq("created_by", req.user.id)
     .order("meeting_at", { ascending: false });
-
-  if (!req.isAdmin) query = query.eq("created_by", req.user.id);
-
-  const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
 // Create a meeting. created_by is taken from the verified token, not the client.
-app.post("/api/meetings", requireAuth, async (req, res) => {
+app.post("/api/meetings", requireAuth, requireEmployee, async (req, res) => {
   const {
     project_name,
     client_name,
@@ -192,8 +474,8 @@ app.post("/api/meetings", requireAuth, async (req, res) => {
   res.status(201).json(data);
 });
 
-// Meeting detail: only the owner or an admin may view it.
-app.get("/api/meetings/:id", requireAuth, async (req, res) => {
+// Meeting detail: only the owner may view it.
+app.get("/api/meetings/:id", requireAuth, requireEmployee, async (req, res) => {
   const { data, error } = await supabase
     .from("meetings")
     .select("*")
@@ -201,14 +483,14 @@ app.get("/api/meetings/:id", requireAuth, async (req, res) => {
     .single();
 
   if (error || !data) return res.status(404).json({ error: "Meeting not found" });
-  if (!req.isAdmin && data.created_by !== req.user.id) {
+  if (data.created_by !== req.user.id) {
     return res.status(403).json({ error: "Forbidden" });
   }
   res.json(data);
 });
 
-// Update a meeting: only the owner or an admin may edit it.
-app.put("/api/meetings/:id", requireAuth, async (req, res) => {
+// Update a meeting: only the owner may edit it.
+app.put("/api/meetings/:id", requireAuth, requireEmployee, async (req, res) => {
   const { data: existing, error: findError } = await supabase
     .from("meetings")
     .select("created_by")
@@ -216,7 +498,7 @@ app.put("/api/meetings/:id", requireAuth, async (req, res) => {
     .single();
 
   if (findError || !existing) return res.status(404).json({ error: "Meeting not found" });
-  if (!req.isAdmin && existing.created_by !== req.user.id) {
+  if (existing.created_by !== req.user.id) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
@@ -346,7 +628,7 @@ async function getProjectForUser(req, projectId) {
     .single();
 
   if (error || !data) return { error: "Project not found", status: 404 };
-  if (!req.isAdmin && data.created_by !== req.user.id) {
+  if (data.created_by !== req.user.id) {
     return { error: "Forbidden", status: 403 };
   }
   return { data };
@@ -363,22 +645,44 @@ async function insertStatusHistory({ projectId, fromStatus, toStatus, comment, c
   if (error) throw new Error(error.message);
 }
 
-// List projects: admins see all, everyone else sees only their own.
-app.get("/api/projects", requireAuth, async (req, res) => {
-  let query = supabase
-    .from("projects")
-    .select("*")
+async function getProjectStatusHistory(projectId) {
+  const { data: rows, error } = await supabase
+    .from("project_status_history")
+    .select("id, from_status, to_status, comment, changed_by, created_at")
+    .eq("project_id", projectId)
     .order("created_at", { ascending: false });
 
-  if (!req.isAdmin) query = query.eq("created_by", req.user.id);
+  if (error) throw new Error(error.message);
 
-  const { data, error } = await query;
+  const userIds = [...new Set((rows || []).map((row) => row.changed_by))];
+  let nameById = {};
+  if (userIds.length) {
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", userIds);
+    nameById = Object.fromEntries((profiles || []).map((p) => [p.id, p.full_name]));
+  }
+
+  return (rows || []).map((row) => ({
+    ...row,
+    changed_by_name: nameById[row.changed_by] || null,
+  }));
+}
+
+// List projects: employees see only their own.
+app.get("/api/projects", requireAuth, requireEmployee, async (req, res) => {
+  const { data, error } = await supabase
+    .from("projects")
+    .select("*")
+    .eq("created_by", req.user.id)
+    .order("created_at", { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
 // Create a project. created_by is taken from the verified token, not the client.
-app.post("/api/projects", requireAuth, async (req, res) => {
+app.post("/api/projects", requireAuth, requireEmployee, async (req, res) => {
   const validationErrors = validateProjectFields(req.body);
   if (validationErrors.length) {
     return res.status(400).json({ error: validationErrors[0] });
@@ -412,45 +716,27 @@ app.post("/api/projects", requireAuth, async (req, res) => {
 });
 
 // Fetch a single project. Only the owner or an admin may view it.
-app.get("/api/projects/:id", requireAuth, async (req, res) => {
+app.get("/api/projects/:id", requireAuth, requireEmployee, async (req, res) => {
   const result = await getProjectForUser(req, req.params.id);
   if (result.error) return res.status(result.status).json({ error: result.error });
   res.json(result.data);
 });
 
 // Status change history for a project.
-app.get("/api/projects/:id/status-history", requireAuth, async (req, res) => {
+app.get("/api/projects/:id/status-history", requireAuth, requireEmployee, async (req, res) => {
   const result = await getProjectForUser(req, req.params.id);
   if (result.error) return res.status(result.status).json({ error: result.error });
 
-  const { data: rows, error } = await supabase
-    .from("project_status_history")
-    .select("id, from_status, to_status, comment, changed_by, created_at")
-    .eq("project_id", req.params.id)
-    .order("created_at", { ascending: false });
-
-  if (error) return res.status(500).json({ error: error.message });
-
-  const userIds = [...new Set((rows || []).map((row) => row.changed_by))];
-  let nameById = {};
-  if (userIds.length) {
-    const { data: profiles } = await supabase
-      .from("profiles")
-      .select("id, full_name")
-      .in("id", userIds);
-    nameById = Object.fromEntries((profiles || []).map((p) => [p.id, p.full_name]));
+  try {
+    const history = await getProjectStatusHistory(req.params.id);
+    res.json(history);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-
-  res.json(
-    (rows || []).map((row) => ({
-      ...row,
-      changed_by_name: nameById[row.changed_by] || null,
-    })),
-  );
 });
 
 // Change project status (comment required). Updates project and appends timeline entry.
-app.post("/api/projects/:id/status", requireAuth, async (req, res) => {
+app.post("/api/projects/:id/status", requireAuth, requireEmployee, async (req, res) => {
   const result = await getProjectForUser(req, req.params.id);
   if (result.error) return res.status(result.status).json({ error: result.error });
 
@@ -496,7 +782,7 @@ app.post("/api/projects/:id/status", requireAuth, async (req, res) => {
 });
 
 // Update a project details (not status). Only the owner or an admin may edit.
-app.patch("/api/projects/:id", requireAuth, async (req, res) => {
+app.patch("/api/projects/:id", requireAuth, requireEmployee, async (req, res) => {
   const { data: existing, error: findErr } = await supabase
     .from("projects")
     .select("created_by")
@@ -536,7 +822,7 @@ app.patch("/api/projects/:id", requireAuth, async (req, res) => {
 });
 
 // Delete a project. Only the owner or an admin may delete.
-app.delete("/api/projects/:id", requireAuth, async (req, res) => {
+app.delete("/api/projects/:id", requireAuth, requireEmployee, async (req, res) => {
   const { data: existing, error: findErr } = await supabase
     .from("projects")
     .select("created_by")
@@ -553,7 +839,75 @@ app.delete("/api/projects/:id", requireAuth, async (req, res) => {
   res.status(204).end();
 });
 
-app.get("/api/employees/:id", requireAuth, async (req, res) => {
+app.get("/api/employees/options", requireAuth, requireEmployee, async (req, res) => {
+  try {
+    const employees = await getEmployeeUsers();
+    res.json(employees.map(({ id, name }) => ({ id, name })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin: view a meeting assigned to an employee (read-only context).
+app.get("/api/employees/:employeeId/meetings/:meetingId", requireAuth, requireAdmin, async (req, res) => {
+  const employee = await getEmployeeById(req.params.employeeId);
+  if (!employee) return res.status(404).json({ error: "Employee not found" });
+
+  const { data, error } = await supabase
+    .from("meetings")
+    .select("*")
+    .eq("id", req.params.meetingId)
+    .eq("employee_id", req.params.employeeId)
+    .single();
+
+  if (error || !data) return res.status(404).json({ error: "Meeting not found" });
+  res.json(data);
+});
+
+// Admin: view a project assigned to an employee (read-only context).
+app.get("/api/employees/:employeeId/projects/:projectId", requireAuth, requireAdmin, async (req, res) => {
+  const employee = await getEmployeeById(req.params.employeeId);
+  if (!employee) return res.status(404).json({ error: "Employee not found" });
+
+  const { data, error } = await supabase
+    .from("projects")
+    .select("*")
+    .eq("id", req.params.projectId)
+    .eq("assigned_to", req.params.employeeId)
+    .single();
+
+  if (error || !data) return res.status(404).json({ error: "Project not found" });
+  res.json(data);
+});
+
+// Admin: status history for a project in employee context.
+app.get(
+  "/api/employees/:employeeId/projects/:projectId/status-history",
+  requireAuth,
+  requireAdmin,
+  async (req, res) => {
+    const employee = await getEmployeeById(req.params.employeeId);
+    if (!employee) return res.status(404).json({ error: "Employee not found" });
+
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("id")
+      .eq("id", req.params.projectId)
+      .eq("assigned_to", req.params.employeeId)
+      .single();
+
+    if (projectError || !project) return res.status(404).json({ error: "Project not found" });
+
+    try {
+      const history = await getProjectStatusHistory(req.params.projectId);
+      res.json(history);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  },
+);
+
+app.get("/api/employees/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const employee = await getEmployeeById(req.params.id);
     if (!employee) return res.status(404).json({ error: "Employee not found" });
@@ -561,7 +915,7 @@ app.get("/api/employees/:id", requireAuth, async (req, res) => {
     const { data: meetings, error: meetingsError } = await supabase
       .from("meetings")
       .select(
-        "id, project_name, client_name, meeting_at, meeting_outcome, project_type",
+        "id, project_name, client_name, meeting_at, meeting_outcome, project_type, upwork_account, duration_minutes, budget_discussed, deadline",
       )
       .eq("employee_id", req.params.id)
       .order("meeting_at", { ascending: false });
@@ -570,7 +924,9 @@ app.get("/api/employees/:id", requireAuth, async (req, res) => {
 
     const { data: projects, error: projectsError } = await supabase
       .from("projects")
-      .select("id, name, client_name, status, start_date, created_at")
+      .select(
+        "id, name, client_name, status, start_date, job_type, job_category, upwork_account, created_at",
+      )
       .eq("assigned_to", req.params.id)
       .order("created_at", { ascending: false });
 
@@ -586,10 +942,120 @@ app.get("/api/employees/:id", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/employees", requireAuth, async (req, res) => {
+app.get("/api/employees", requireAuth, requireAdmin, async (req, res) => {
   try {
     const employees = await getEmployeeUsers();
     res.json(employees);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+function textMatches(term, ...fields) {
+  const lower = term.toLowerCase();
+  return fields.some((f) => f && String(f).toLowerCase().includes(lower));
+}
+
+app.get("/api/search", requireAuth, async (req, res) => {
+  try {
+    const term = String(req.query.q || "").trim();
+    if (term.length < 2) {
+      return res.json({ meetings: [], projects: [], employees: [] });
+    }
+
+    const [meetingsResult, projectsResult] = await Promise.all([
+      scopeMeetings(
+        req,
+        "id, project_name, client_name, employee_id, employee_name, meeting_at, created_by",
+      )
+        .order("meeting_at", { ascending: false })
+        .limit(300),
+      scopeProjects(req, "id, name, client_name, status, assigned_to, created_by, created_at")
+        .order("created_at", { ascending: false })
+        .limit(300),
+    ]);
+
+    if (meetingsResult.error) throw new Error(meetingsResult.error.message);
+    if (projectsResult.error) throw new Error(projectsResult.error.message);
+
+    const meetings = (meetingsResult.data || [])
+      .filter((m) => textMatches(term, m.project_name, m.client_name, m.employee_name))
+      .slice(0, 8);
+
+    const projects = (projectsResult.data || [])
+      .filter((p) => textMatches(term, p.name, p.client_name))
+      .slice(0, 8);
+
+    let employees = [];
+    if (req.isAdmin) {
+      const allEmployees = await getEmployeeUsers();
+      employees = allEmployees
+        .filter((e) => textMatches(term, e.name, e.email))
+        .slice(0, 8)
+        .map(({ id, name, email }) => ({ id, name, email }));
+    }
+
+    res.json({ meetings, projects, employees });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/profile", requireAuth, async (req, res) => {
+  try {
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("full_name, role, employee_code, job_title")
+      .eq("id", req.user.id)
+      .single();
+
+    if (error) throw new Error(error.message);
+
+    const { data: authData, error: authError } = await supabase.auth.admin.getUserById(req.user.id);
+    if (authError) throw new Error(authError.message);
+
+    res.json({
+      full_name: profile?.full_name ?? null,
+      role: profile?.role ?? "employee",
+      employee_code: profile?.employee_code ?? null,
+      job_title: profile?.job_title ?? null,
+      email: authData.user?.email ?? null,
+      created_at: authData.user?.created_at ?? null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.patch("/api/profile", requireAuth, async (req, res) => {
+  try {
+    const { full_name, employee_code, job_title } = req.body ?? {};
+    const updates = {};
+
+    if (full_name !== undefined) {
+      updates.full_name = String(full_name).trim() || null;
+    }
+    if (employee_code !== undefined) {
+      updates.employee_code = String(employee_code).trim() || null;
+    }
+    if (job_title !== undefined) {
+      updates.job_title = String(job_title).trim() || null;
+    }
+
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({ error: "No fields to update" });
+    }
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .update(updates)
+      .eq("id", req.user.id)
+      .select("full_name, role, employee_code, job_title")
+      .single();
+
+    if (error) throw new Error(error.message);
+
+    res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
