@@ -6,6 +6,7 @@ import {
   validateDailyLogFields,
 } from "./projects.validator.js";
 import * as projectsRepo from "./projects.repository.js";
+import { scopeProjects } from "../../shared/query-scope.js";
 
 export async function getProjectForUser(req, projectId) {
   const data = await projectsRepo.findById(projectId);
@@ -39,6 +40,25 @@ async function enrichDailyLogs(rows) {
 
 export async function listProjects(req) {
   try {
+    if (req.isAdmin) {
+      const { data, error } = await scopeProjects(
+        req,
+        "id, name, client_name, status, start_date, due_date, job_type, job_category, assigned_to, created_by, created_at",
+      ).order("created_at", { ascending: false });
+
+      if (error) throw new Error(error.message);
+
+      const assigneeIds = [...new Set((data || []).map((p) => p.assigned_to).filter(Boolean))];
+      const nameById = await projectsRepo.getProfileNames(assigneeIds);
+
+      return {
+        data: (data || []).map((p) => ({
+          ...p,
+          assignee_name: p.assigned_to ? nameById[p.assigned_to] || null : null,
+        })),
+      };
+    }
+
     const data = await projectsRepo.listByCreator(req.user.id);
     return { data };
   } catch (err) {
