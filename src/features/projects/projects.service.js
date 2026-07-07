@@ -5,6 +5,7 @@ import {
   dailyLogPayload,
   validateDailyLogFields,
   validateMilestoneCostChange,
+  parseMoneyAmount,
 } from "./projects.validator.js";
 import * as projectsRepo from "./projects.repository.js";
 import { scopeProjects } from "../../shared/query-scope.js";
@@ -65,19 +66,34 @@ export async function exportProjects(req) {
   const projects = await projectsRepo.listAllProjectsForExport();
   const assigneeIds = [...new Set(projects.map((p) => p.assigned_to).filter(Boolean))];
   const nameById = await projectsRepo.getProfileNames(assigneeIds);
+  const contractProjectIds = projects.filter((p) => p.job_type === "contract").map((p) => p.id);
+  const latestMilestoneByProjectId =
+    await projectsRepo.getLatestMilestonesByProjectIds(contractProjectIds);
 
-  const rows = projects.map((project) => ({
-    employee_name: project.assigned_to ? nameById[project.assigned_to] || null : null,
-    project_name: project.name,
-    client_name: project.client_name,
-    upwork_account: project.upwork_account,
-    job_type: project.job_type,
-    job_category: project.job_category,
-    link_url: project.link_url,
-    status: project.status,
-    start_date: project.start_date,
-    due_date: project.due_date,
-  }));
+  const rows = projects.map((project) => {
+    let price = null;
+    if (project.job_type === "contract") {
+      price = parseMoneyAmount(
+        latestMilestoneByProjectId[project.id] ?? project.milestone_cost,
+      );
+    } else if (project.job_type === "hourly") {
+      price = parseMoneyAmount(project.hourly_rate);
+    }
+
+    return {
+      employee_name: project.assigned_to ? nameById[project.assigned_to] || null : null,
+      project_name: project.name,
+      client_name: project.client_name,
+      upwork_account: project.upwork_account,
+      job_type: project.job_type,
+      price,
+      job_category: project.job_category,
+      link_url: project.link_url,
+      status: project.status,
+      start_date: project.start_date,
+      due_date: project.due_date,
+    };
+  });
 
   return { data: rows };
 }
