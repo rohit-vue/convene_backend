@@ -260,3 +260,53 @@ export async function getProfileNames(userIds) {
   if (error) throw new Error(error.message);
   return Object.fromEntries((data || []).map((p) => [p.id, p.full_name]));
 }
+
+export async function findShareForUser(projectId, userId) {
+  const { data, error } = await supabase
+    .from("project_shares")
+    .select("id, project_id, shared_with, shared_by, can_edit_logs, created_at, revoked_at")
+    .eq("project_id", projectId)
+    .eq("shared_with", userId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data || null;
+}
+
+export async function listSharesForProject(projectId) {
+  const { data, error } = await supabase
+    .from("project_shares")
+    .select("id, project_id, shared_with, shared_by, can_edit_logs, created_at, revoked_at")
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function listSharedProjectsForUser(userId) {
+  const { data, error } = await supabase
+    .from("project_shares")
+    .select("id, can_edit_logs, project_id")
+    .eq("shared_with", userId);
+
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function insertShare(row) {
+  const { data, error } = await supabase.from("project_shares").insert(row).select().single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function updateShare(shareId, updates) {
+  const { data, error } = await supabase
+    .from("project_shares")
+    .update(updates)
+    .eq("id", shareId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
