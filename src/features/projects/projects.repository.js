@@ -142,6 +142,16 @@ export async function listByAssignee(employeeId) {
   return data || [];
 }
 
+export async function listAllProjectsForExport() {
+  const { data, error } = await supabase
+    .from("projects")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
 export async function getProfileNames(userIds) {
   if (!userIds.length) return {};
 
