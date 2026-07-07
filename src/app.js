@@ -11,6 +11,7 @@ import employeesRoutes from "./features/employees/employees.routes.js";
 import searchRoutes from "./features/search/search.routes.js";
 import profileRoutes from "./features/profile/profile.routes.js";
 import notificationsRoutes from "./features/notifications/notifications.routes.js";
+import bidsRoutes from "./features/bids/bids.routes.js";
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.use("/api/employees", employeesRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/notifications", notificationsRoutes);
+app.use("/api/bids", bidsRoutes);
 
 app.use(errorHandler);
 
