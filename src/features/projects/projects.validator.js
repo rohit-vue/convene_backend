@@ -5,6 +5,13 @@ import {
   PROJECT_JOB_CATEGORIES,
 } from "./projects.constants.js";
 
+export function parseMoneyAmount(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const digits = String(value).replace(/\D/g, "");
+  if (!digits) return null;
+  return Number(digits);
+}
+
 export function validateProjectFields(body, { partial = false } = {}) {
   const errors = [];
   const { status, priority, job_type, job_category } = body;
@@ -15,6 +22,10 @@ export function validateProjectFields(body, { partial = false } = {}) {
   if (job_type && !PROJECT_JOB_TYPES.includes(job_type)) errors.push("Invalid job type");
   if (job_category && !PROJECT_JOB_CATEGORIES.includes(job_category)) {
     errors.push("Invalid job category");
+  }
+  if (body.hourly_rate !== undefined && body.hourly_rate !== null && body.hourly_rate !== "") {
+    const rate = parseMoneyAmount(body.hourly_rate);
+    if (rate === null || rate < 0) errors.push("hourly_rate must be a non-negative number");
   }
 
   return errors;
@@ -37,6 +48,10 @@ export function projectPayload(body, { forInsert = false } = {}) {
     link_url: body.link_url || null,
     notes: body.notes || null,
     assigned_to: body.assigned_to || null,
+    hourly_rate:
+      body.hourly_rate === undefined || body.hourly_rate === null || body.hourly_rate === ""
+        ? null
+        : parseMoneyAmount(body.hourly_rate),
   };
 
   if (forInsert) return fields;
@@ -72,6 +87,19 @@ export function validateDailyLogFields(body, { jobType } = {}) {
   }
 
   return errors;
+}
+
+export function validateMilestoneCostChange(body) {
+  const errors = [];
+  const milestoneCost = parseMoneyAmount(body.milestone_cost ?? body.amount);
+  const comment = String(body.comment || "").trim();
+
+  if (milestoneCost === null || milestoneCost < 0) {
+    errors.push("amount must be a non-negative number");
+  }
+  if (!comment) errors.push("comment is required when adding a milestone");
+
+  return { errors, milestoneCost, comment };
 }
 
 function isFutureLogDate(logDate) {
