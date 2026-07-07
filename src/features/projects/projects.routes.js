@@ -30,6 +30,14 @@ router.post(
   asyncHandler(projectsController.addMilestone),
 );
 router.post("/:id/milestones", requireAuth, requireEmployee, asyncHandler(projectsController.addMilestone));
+router.get("/:id/shares", requireAuth, requireEmployee, asyncHandler(projectsController.listShares));
+router.post("/:id/shares", requireAuth, requireEmployee, asyncHandler(projectsController.share));
+router.patch(
+  "/:id/shares/:shareId/revoke",
+  requireAuth,
+  requireEmployee,
+  asyncHandler(projectsController.revokeShare),
+);
 router.get("/:id", requireAuth, requireEmployee, asyncHandler(projectsController.getById));
 router.patch("/:id", requireAuth, requireEmployee, asyncHandler(projectsController.patch));
 router.delete("/:id", requireAuth, requireEmployee, asyncHandler(projectsController.remove));

@@ -87,3 +87,15 @@ export async function patch(req, res) {
 export async function remove(req, res) {
   respond(res, await projectsService.deleteProject(req, req.params.id));
 }
+
+export async function listShares(req, res) {
+  respond(res, await projectsService.listProjectShares(req, req.params.id));
+}
+
+export async function share(req, res) {
+  respond(res, await projectsService.shareProject(req, req.params.id, req.body));
+}
+
+export async function revokeShare(req, res) {
+  respond(res, await projectsService.revokeProjectShare(req, req.params.id, req.params.shareId));
+}
