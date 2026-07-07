@@ -10,6 +10,16 @@ export async function createMeetingAssignedNotification({ userId, meetingId, pro
   });
 }
 
+export async function createProjectAssignedNotification({ userId, projectId, projectName }) {
+  return notificationsRepo.insertNotification({
+    user_id: userId,
+    type: "project_assigned",
+    title: "New project assigned",
+    body: `You have been assigned the project "${projectName}". Please accept to confirm.`,
+    project_id: projectId,
+  });
+}
+
 export async function listForUser(req) {
   return notificationsRepo.listNotificationsForUser(req.user.id);
 }

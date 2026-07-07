@@ -1,7 +1,9 @@
 import { supabase } from "../../config/supabase.js";
 import { scopeMeetings, scopeProjects } from "../../shared/query-scope.js";
 import { applyEmployeeMeetingScope } from "../../shared/meeting-access.js";
+import { applyEmployeeProjectScope } from "../../shared/project-access.js";
 import * as meetingsRepo from "../meetings/meetings.repository.js";
+import * as projectsRepo from "../projects/projects.repository.js";
 import { enrichMeetings } from "../meetings/meetings.service.js";
 
 const STATUS_LABELS = {
@@ -119,7 +121,10 @@ export async function getStats(req) {
       "assignment_status",
       "accepted",
     );
-    projectsQuery = projectsQuery.eq("created_by", req.user.id);
+    projectsQuery = applyEmployeeProjectScope(projectsQuery, req.user.id).eq(
+      "assignment_status",
+      "accepted",
+    );
   }
 
   const [{ count: meetingsCount }, { count: projectsCount }] = await Promise.all([
@@ -153,7 +158,9 @@ export async function getOverview(req) {
       "id, project_name, client_name, employee_id, meeting_at, meeting_outcome, created_at, assignment_status",
       { acceptedOnly: !req.isAdmin },
     ),
-    scopeProjects(req, "id, name, client_name, status, start_date, assigned_to, created_at"),
+    scopeProjects(req, "id, name, client_name, status, start_date, assigned_to, created_at", {
+      acceptedOnly: !req.isAdmin,
+    }),
   ]);
 
   if (meetingsError) throw new Error(meetingsError.message);
@@ -163,9 +170,11 @@ export async function getOverview(req) {
   const projects = allProjects || [];
 
   let pendingMeetings = [];
+  let pendingProjects = [];
   if (!req.isAdmin) {
     const pending = await meetingsRepo.listPendingMeetingsForUser(req);
     pendingMeetings = await enrichMeetings(pending);
+    pendingProjects = await projectsRepo.listPendingForUser(req.user.id);
   }
 
   const projectStatusBreakdown = countByField(projects, "status", PROJECT_STATUS_KEYS);
@@ -205,6 +214,7 @@ export async function getOverview(req) {
     meetingOutcomeBreakdown,
     activity,
     pendingMeetings,
+    pendingProjects,
   };
 }
 
@@ -226,7 +236,10 @@ export async function getActivity(req) {
       "assignment_status",
       "accepted",
     );
-    projectsQuery = projectsQuery.eq("created_by", req.user.id);
+    projectsQuery = applyEmployeeProjectScope(projectsQuery, req.user.id).eq(
+      "assignment_status",
+      "accepted",
+    );
   }
 
   const [{ data: meetings }, { data: projects }] = await Promise.all([

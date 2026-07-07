@@ -6,6 +6,9 @@ import * as projectsController from "./projects.controller.js";
 const router = Router();
 
 router.get("/", requireAuth, asyncHandler(projectsController.list));
+router.get("/pending", requireAuth, asyncHandler(projectsController.listPending));
+router.post("/assign", requireAuth, requireAdmin, asyncHandler(projectsController.assign));
+router.patch("/:id/accept", requireAuth, requireEmployee, asyncHandler(projectsController.accept));
 router.get("/export", requireAuth, requireAdmin, asyncHandler(projectsController.exportAll));
 router.post("/", requireAuth, requireEmployee, asyncHandler(projectsController.create));
 router.get("/:id/status-history", requireAuth, requireEmployee, asyncHandler(projectsController.getStatusHistory));
