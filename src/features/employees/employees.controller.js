@@ -29,6 +29,16 @@ export async function getById(req, res) {
   respond(res, await employeesService.getEmployeeDetail(req.params.id));
 }
 
+export async function getMeetingUpdates(req, res) {
+  respond(
+    res,
+    await employeesService.getEmployeeMeetingUpdates(
+      req.params.employeeId,
+      req.params.meetingId,
+    ),
+  );
+}
+
 export async function getMeeting(req, res) {
   respond(
     res,

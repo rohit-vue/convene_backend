@@ -5,8 +5,14 @@ import * as employeesController from "./employees.controller.js";
 
 const router = Router();
 
-router.get("/options", requireAuth, requireEmployee, asyncHandler(employeesController.options));
+router.get("/options", requireAuth, asyncHandler(employeesController.options));
 router.get("/", requireAuth, requireAdmin, asyncHandler(employeesController.list));
+router.get(
+  "/:employeeId/meetings/:meetingId/updates",
+  requireAuth,
+  requireAdmin,
+  asyncHandler(employeesController.getMeetingUpdates),
+);
 router.get(
   "/:employeeId/meetings/:meetingId",
   requireAuth,

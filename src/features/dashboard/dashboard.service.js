@@ -1,5 +1,8 @@
 import { supabase } from "../../config/supabase.js";
 import { scopeMeetings, scopeProjects } from "../../shared/query-scope.js";
+import { applyEmployeeMeetingScope } from "../../shared/meeting-access.js";
+import * as meetingsRepo from "../meetings/meetings.repository.js";
+import { enrichMeetings } from "../meetings/meetings.service.js";
 
 const STATUS_LABELS = {
   planning: "Planning",
@@ -112,7 +115,10 @@ export async function getStats(req) {
   let projectsQuery = supabase.from("projects").select("*", { count: "exact", head: true });
 
   if (!req.isAdmin) {
-    meetingsQuery = meetingsQuery.eq("created_by", req.user.id);
+    meetingsQuery = applyEmployeeMeetingScope(meetingsQuery, req.user.id).eq(
+      "assignment_status",
+      "accepted",
+    );
     projectsQuery = projectsQuery.eq("created_by", req.user.id);
   }
 
@@ -144,7 +150,8 @@ export async function getOverview(req) {
   ] = await Promise.all([
     scopeMeetings(
       req,
-      "id, project_name, client_name, employee_id, meeting_at, meeting_outcome, created_at",
+      "id, project_name, client_name, employee_id, meeting_at, meeting_outcome, created_at, assignment_status",
+      { acceptedOnly: !req.isAdmin },
     ),
     scopeProjects(req, "id, name, client_name, status, start_date, assigned_to, created_at"),
   ]);
@@ -154,6 +161,12 @@ export async function getOverview(req) {
 
   const meetings = allMeetings || [];
   const projects = allProjects || [];
+
+  let pendingMeetings = [];
+  if (!req.isAdmin) {
+    const pending = await meetingsRepo.listPendingMeetingsForUser(req);
+    pendingMeetings = await enrichMeetings(pending);
+  }
 
   const projectStatusBreakdown = countByField(projects, "status", PROJECT_STATUS_KEYS);
   const meetingOutcomeBreakdown = countByField(meetings, "meeting_outcome", MEETING_OUTCOME_KEYS);
@@ -191,6 +204,7 @@ export async function getOverview(req) {
     projectStatusBreakdown,
     meetingOutcomeBreakdown,
     activity,
+    pendingMeetings,
   };
 }
 
@@ -208,7 +222,10 @@ export async function getActivity(req) {
     .limit(10);
 
   if (!req.isAdmin) {
-    meetingsQuery = meetingsQuery.eq("created_by", req.user.id);
+    meetingsQuery = applyEmployeeMeetingScope(meetingsQuery, req.user.id).eq(
+      "assignment_status",
+      "accepted",
+    );
     projectsQuery = projectsQuery.eq("created_by", req.user.id);
   }
 

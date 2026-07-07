@@ -1,6 +1,9 @@
 import { supabase } from "../../config/supabase.js";
 import * as meetingsRepo from "./meetings.repository.js";
 import { meetingUpdatePayload } from "./meetings.validator.js";
+import { canAccessMeeting } from "../../shared/meeting-access.js";
+import { createMeetingAssignedNotification } from "../notifications/notifications.service.js";
+import * as notificationsRepo from "../notifications/notifications.repository.js";
 
 export function enrichMeetingWithLatest(meeting, latestUpdate) {
   return {
@@ -36,7 +39,7 @@ export async function enrichMeetings(meetings, { withLatest = false } = {}) {
 export async function getMeetingForUser(req, meetingId) {
   const data = await meetingsRepo.findMeetingById(meetingId);
   if (!data) return { error: "Meeting not found", status: 404 };
-  if (!req.isAdmin && data.created_by !== req.user.id) {
+  if (!canAccessMeeting(req, data)) {
     return { error: "Forbidden", status: 403 };
   }
   return { data };
@@ -63,7 +66,15 @@ export async function syncParentMeetingFromLatestUpdate(meetingId, updatedBy) {
 }
 
 export async function listMeetings(req) {
-  return meetingsRepo.listMeetingsForUser(req);
+  const acceptedOnly = !req.isAdmin;
+  const data = await meetingsRepo.listMeetingsForUser(req, { acceptedOnly });
+  return enrichMeetings(data);
+}
+
+export async function listPendingMeetings(req) {
+  if (req.isAdmin) return [];
+  const data = await meetingsRepo.listPendingMeetingsForUser(req);
+  return enrichMeetings(data);
 }
 
 export async function getMeetingDetail(req, meetingId) {
@@ -129,6 +140,8 @@ export async function createMeeting(req, body) {
       deadline: deadline || null,
       notes: notes || null,
       requirements_discussed: requirements_discussed || null,
+      assignment_status: "accepted",
+      accepted_at: new Date().toISOString(),
       created_by: req.user.id,
       updated_by: req.user.id,
     });
@@ -163,6 +176,85 @@ export async function createMeeting(req, body) {
     withLatest: false,
   });
   return { data: enriched, status: 201 };
+}
+
+export async function assignMeeting(req, body) {
+  if (!req.isAdmin) {
+    return { error: "Admin access required", status: 403 };
+  }
+
+  const { employee_id, project_name, client_name, upwork_account, meeting_at } = body;
+
+  if (!employee_id || !project_name || !client_name || !meeting_at) {
+    return {
+      error: "employee_id, project_name, client_name and meeting_at are required",
+      status: 400,
+    };
+  }
+
+  const employee = await meetingsRepo.findEmployeeProfile(employee_id);
+  if (!employee || employee.role !== "employee") {
+    return { error: "Valid employee is required", status: 400 };
+  }
+
+  let meeting;
+  try {
+    meeting = await meetingsRepo.insertMeeting({
+      project_name,
+      client_name,
+      employee_id,
+      upwork_account: upwork_account || null,
+      meeting_at,
+      assignment_status: "pending",
+      assigned_by: req.user.id,
+      created_by: req.user.id,
+      updated_by: req.user.id,
+    });
+  } catch (err) {
+    return { error: err.message, status: 400 };
+  }
+
+  try {
+    await createMeetingAssignedNotification({
+      userId: employee_id,
+      meetingId: meeting.id,
+      projectName: project_name,
+    });
+  } catch (err) {
+    await meetingsRepo.deleteMeeting(meeting.id);
+    return { error: err.message, status: 400 };
+  }
+
+  const [enriched] = await enrichMeetings([meeting], { withLatest: false });
+  return { data: enriched, status: 201 };
+}
+
+export async function acceptMeeting(req, meetingId) {
+  if (req.isAdmin) {
+    return { error: "Only employees can accept meetings", status: 403 };
+  }
+
+  const meeting = await meetingsRepo.findMeetingById(meetingId);
+  if (!meeting) return { error: "Meeting not found", status: 404 };
+  if (meeting.employee_id !== req.user.id) {
+    return { error: "Forbidden", status: 403 };
+  }
+  if (meeting.assignment_status !== "pending") {
+    return { error: "Meeting is not pending acceptance", status: 400 };
+  }
+
+  try {
+    const data = await meetingsRepo.updateMeeting(meetingId, {
+      assignment_status: "accepted",
+      accepted_at: new Date().toISOString(),
+      updated_by: req.user.id,
+    });
+    await notificationsRepo.markNotificationsReadForMeeting(req.user.id, meetingId);
+    const [enriched] = await enrichMeetings([data], { withLatest: false });
+    return { data: enriched };
+  } catch (err) {
+    return { error: err.message, status: 400 };
+  }
 }
 
 export async function updateMeetingParent(req, meetingId, body) {
