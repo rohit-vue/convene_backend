@@ -65,10 +65,18 @@ export function validateDailyLogFields(body, { jobType } = {}) {
   const { log_date, tasks_done, tracker_minutes } = dailyLogPayload(body, { jobType });
 
   if (!log_date) errors.push("log_date is required");
+  if (log_date && isFutureLogDate(log_date)) errors.push("log_date cannot be in the future");
   if (!tasks_done) errors.push("tasks_done is required");
   if (jobType === "hourly" && (!Number.isFinite(tracker_minutes) || tracker_minutes < 0)) {
     errors.push("tracker_minutes must be a non-negative number");
   }
 
   return errors;
+}
+
+function isFutureLogDate(logDate) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(logDate)) return false;
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return logDate > today;
 }
