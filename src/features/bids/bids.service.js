@@ -36,3 +36,44 @@ export async function createBid(req, body) {
     return { error: err.message, status: 400 };
   }
 }
+
+export async function deleteBid(req, bidId) {
+  if (!req.isAdmin) {
+    return { error: "Admin access required", status: 403 };
+  }
+
+  const existing = await bidsRepo.findById(bidId);
+  if (!existing) {
+    return { error: "Bid not found", status: 404 };
+  }
+
+  try {
+    await bidsRepo.remove(bidId);
+    return { status: 204 };
+  } catch (err) {
+    return { error: err.message, status: 400 };
+  }
+}
+
+export async function updateBid(req, bidId, body) {
+  if (!req.isAdmin) {
+    return { error: "Admin access required", status: 403 };
+  }
+
+  const existing = await bidsRepo.findById(bidId);
+  if (!existing) {
+    return { error: "Bid not found", status: 404 };
+  }
+
+  const { errors, payload } = validateBidFields(body);
+  if (errors.length) {
+    return { error: errors[0], status: 400 };
+  }
+
+  try {
+    const data = await bidsRepo.update(bidId, payload);
+    return { data };
+  } catch (err) {
+    return { error: err.message, status: 400 };
+  }
+}

@@ -3,6 +3,7 @@ export const UPWORK_ACCOUNTS = [
   "Vaibhav Srivastav",
   "Gulshan Khera",
   "Ashutosh Pandey",
+  "Siddhart Srivastav",
 ];
 
 export const BID_STATUSES = ["applied", "canceled", "accepted"];
