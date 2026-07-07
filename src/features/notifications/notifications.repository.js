@@ -9,7 +9,7 @@ export async function insertNotification(row) {
 export async function listNotificationsForUser(userId, { limit = 20 } = {}) {
   const { data, error } = await supabase
     .from("notifications")
-    .select("id, type, title, body, meeting_id, read_at, created_at")
+    .select("id, type, title, body, meeting_id, project_id, read_at, created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -48,6 +48,17 @@ export async function markNotificationsReadForMeeting(userId, meetingId) {
     .update({ read_at: new Date().toISOString() })
     .eq("user_id", userId)
     .eq("meeting_id", meetingId)
+    .is("read_at", null);
+
+  if (error) throw new Error(error.message);
+}
+
+export async function markNotificationsReadForProject(userId, projectId) {
+  const { error } = await supabase
+    .from("notifications")
+    .update({ read_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("project_id", projectId)
     .is("read_at", null);
 
   if (error) throw new Error(error.message);

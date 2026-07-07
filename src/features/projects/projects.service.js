@@ -9,11 +9,14 @@ import {
 } from "./projects.validator.js";
 import * as projectsRepo from "./projects.repository.js";
 import { scopeProjects } from "../../shared/query-scope.js";
+import { canAccessProject } from "../../shared/project-access.js";
+import { createProjectAssignedNotification } from "../notifications/notifications.service.js";
+import * as notificationsRepo from "../notifications/notifications.repository.js";
 
 export async function getProjectForUser(req, projectId) {
   const data = await projectsRepo.findById(projectId);
   if (!data) return { error: "Project not found", status: 404 };
-  if (data.created_by !== req.user.id) {
+  if (!canAccessProject(req, data)) {
     return { error: "Forbidden", status: 403 };
   }
   return { data };
@@ -103,7 +106,7 @@ export async function listProjects(req) {
     if (req.isAdmin) {
       const { data, error } = await scopeProjects(
         req,
-        "id, name, client_name, status, start_date, due_date, job_type, job_category, assigned_to, created_by, created_at",
+        "id, name, client_name, status, start_date, due_date, job_type, job_category, assigned_to, created_by, assignment_status, created_at",
       ).order("created_at", { ascending: false });
 
       if (error) throw new Error(error.message);
@@ -119,8 +122,12 @@ export async function listProjects(req) {
       };
     }
 
-    const data = await projectsRepo.listByCreator(req.user.id);
-    return { data };
+    const { data, error } = await scopeProjects(req, "*", { acceptedOnly: true }).order(
+      "created_at",
+      { ascending: false },
+    );
+    if (error) throw new Error(error.message);
+    return { data: data || [] };
   } catch (err) {
     return { error: err.message, status: 500 };
   }
@@ -137,6 +144,8 @@ export async function createProject(req, body) {
       ...projectPayload(body, { forInsert: true }),
       created_by: req.user.id,
       assigned_to: body.assigned_to || req.user.id,
+      assignment_status: "accepted",
+      accepted_at: new Date().toISOString(),
     });
 
     try {
@@ -152,6 +161,136 @@ export async function createProject(req, body) {
     }
 
     return { data, status: 201 };
+  } catch (err) {
+    return { error: err.message, status: 400 };
+  }
+}
+
+export async function listPendingProjects(req) {
+  if (req.isAdmin) return { data: [] };
+  try {
+    const data = await projectsRepo.listPendingForUser(req.user.id);
+    return { data };
+  } catch (err) {
+    return { error: err.message, status: 500 };
+  }
+}
+
+export async function assignProject(req, body) {
+  if (!req.isAdmin) {
+    return { error: "Admin access required", status: 403 };
+  }
+
+  const {
+    employee_id,
+    name,
+    client_name,
+    start_date,
+    job_category,
+    job_type,
+    upwork_account,
+    link_url,
+  } = body;
+
+  if (!employee_id || !name || !client_name) {
+    return {
+      error: "employee_id, name and client_name are required",
+      status: 400,
+    };
+  }
+
+  const validationErrors = validateProjectFields({
+    name,
+    client_name,
+    job_category,
+    job_type,
+  });
+  if (validationErrors.length) {
+    return { error: validationErrors[0], status: 400 };
+  }
+
+  const employee = await projectsRepo.findEmployeeProfile(employee_id);
+  if (!employee || employee.role !== "employee") {
+    return { error: "Valid employee is required", status: 400 };
+  }
+
+  let project;
+  try {
+    project = await projectsRepo.insert({
+      name: String(name).trim(),
+      client_name: String(client_name).trim(),
+      status: "planning",
+      priority: "medium",
+      start_date: start_date || null,
+      job_category: job_category || null,
+      job_type: job_type || null,
+      upwork_account: upwork_account || null,
+      link_url: link_url || null,
+      assigned_to: employee_id,
+      assignment_status: "pending",
+      assigned_by: req.user.id,
+      created_by: req.user.id,
+    });
+  } catch (err) {
+    return { error: err.message, status: 400 };
+  }
+
+  try {
+    await projectsRepo.insertStatusHistory({
+      project_id: project.id,
+      from_status: null,
+      to_status: project.status,
+      comment: "Project assigned",
+      changed_by: req.user.id,
+    });
+  } catch (err) {
+    await projectsRepo.remove(project.id);
+    return { error: err.message, status: 400 };
+  }
+
+  try {
+    await createProjectAssignedNotification({
+      userId: employee_id,
+      projectId: project.id,
+      projectName: project.name,
+    });
+  } catch (err) {
+    await projectsRepo.remove(project.id);
+    return { error: err.message, status: 400 };
+  }
+
+  const nameById = await projectsRepo.getProfileNames([employee_id]);
+  return {
+    data: {
+      ...project,
+      assignee_name: nameById[employee_id] || null,
+    },
+    status: 201,
+  };
+}
+
+export async function acceptProject(req, projectId) {
+  if (req.isAdmin) {
+    return { error: "Only employees can accept projects", status: 403 };
+  }
+
+  const project = await projectsRepo.findById(projectId);
+  if (!project) return { error: "Project not found", status: 404 };
+  if (project.assigned_to !== req.user.id) {
+    return { error: "Forbidden", status: 403 };
+  }
+  if (project.assignment_status !== "pending") {
+    return { error: "Project is not pending acceptance", status: 400 };
+  }
+
+  try {
+    const data = await projectsRepo.update(projectId, {
+      assignment_status: "accepted",
+      accepted_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    await notificationsRepo.markNotificationsReadForProject(req.user.id, projectId);
+    return { data };
   } catch (err) {
     return { error: err.message, status: 400 };
   }
@@ -366,7 +505,7 @@ export async function changeStatus(req, projectId, body) {
 export async function patchProject(req, projectId, body) {
   const existing = await projectsRepo.findById(projectId);
   if (!existing) return { error: "Project not found", status: 404 };
-  if (!req.isAdmin && existing.created_by !== req.user.id) {
+  if (!req.isAdmin && existing.created_by !== req.user.id && existing.assigned_to !== req.user.id) {
     return { error: "Forbidden", status: 403 };
   }
 
@@ -418,7 +557,7 @@ export async function patchProject(req, projectId, body) {
 export async function deleteProject(req, projectId) {
   const existing = await projectsRepo.findCreatedBy(projectId);
   if (!existing) return { error: "Project not found", status: 404 };
-  if (!req.isAdmin && existing.created_by !== req.user.id) {
+  if (!req.isAdmin && existing.created_by !== req.user.id && existing.assigned_to !== req.user.id) {
     return { error: "Forbidden", status: 403 };
   }
 

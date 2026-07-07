@@ -1,5 +1,6 @@
 import { supabase } from "../config/supabase.js";
 import { applyEmployeeMeetingScope } from "./meeting-access.js";
+import { applyEmployeeProjectScope } from "./project-access.js";
 
 export function scopeMeetings(req, columns, { acceptedOnly = false } = {}) {
   let q = supabase.from("meetings").select(columns);
@@ -10,8 +11,11 @@ export function scopeMeetings(req, columns, { acceptedOnly = false } = {}) {
   return q;
 }
 
-export function scopeProjects(req, columns) {
+export function scopeProjects(req, columns, { acceptedOnly = false } = {}) {
   let q = supabase.from("projects").select(columns);
-  if (!req.isAdmin) q = q.eq("created_by", req.user.id);
+  if (!req.isAdmin) {
+    q = applyEmployeeProjectScope(q, req.user.id);
+    if (acceptedOnly) q = q.eq("assignment_status", "accepted");
+  }
   return q;
 }

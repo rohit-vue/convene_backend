@@ -21,6 +21,18 @@ export async function list(req, res) {
   respond(res, await projectsService.listProjects(req));
 }
 
+export async function listPending(req, res) {
+  respond(res, await projectsService.listPendingProjects(req));
+}
+
+export async function assign(req, res) {
+  respond(res, await projectsService.assignProject(req, req.body));
+}
+
+export async function accept(req, res) {
+  respond(res, await projectsService.acceptProject(req, req.params.id));
+}
+
 export async function create(req, res) {
   respond(res, await projectsService.createProject(req, req.body));
 }

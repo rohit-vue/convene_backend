@@ -52,6 +52,30 @@ export async function remove(projectId) {
   if (error) throw new Error(error.message);
 }
 
+export async function findEmployeeProfile(employeeId) {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, full_name, role")
+    .eq("id", employeeId)
+    .single();
+  if (error || !data) return null;
+  return data;
+}
+
+export async function listPendingForUser(userId) {
+  const { data, error } = await supabase
+    .from("projects")
+    .select(
+      "id, name, client_name, status, start_date, job_type, job_category, upwork_account, link_url, assigned_to, assignment_status, created_at",
+    )
+    .eq("assigned_to", userId)
+    .eq("assignment_status", "pending")
+    .order("created_at", { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
 export async function insertStatusHistory(row) {
   const { error } = await supabase.from("project_status_history").insert(row);
   if (error) throw new Error(error.message);
