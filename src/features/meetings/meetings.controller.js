@@ -19,6 +19,23 @@ export async function list(req, res) {
   }
 }
 
+export async function listPending(req, res) {
+  try {
+    const data = await meetingsService.listPendingMeetings(req);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+export async function assign(req, res) {
+  respond(res, await meetingsService.assignMeeting(req, req.body));
+}
+
+export async function accept(req, res) {
+  respond(res, await meetingsService.acceptMeeting(req, req.params.id));
+}
+
 export async function create(req, res) {
   respond(res, await meetingsService.createMeeting(req, req.body));
 }

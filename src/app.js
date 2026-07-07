@@ -10,6 +10,7 @@ import projectsRoutes from "./features/projects/projects.routes.js";
 import employeesRoutes from "./features/employees/employees.routes.js";
 import searchRoutes from "./features/search/search.routes.js";
 import profileRoutes from "./features/profile/profile.routes.js";
+import notificationsRoutes from "./features/notifications/notifications.routes.js";
 
 const app = express();
 
@@ -27,6 +28,7 @@ app.use("/api/projects", projectsRoutes);
 app.use("/api/employees", employeesRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/profile", profileRoutes);
+app.use("/api/notifications", notificationsRoutes);
 
 app.use(errorHandler);
 

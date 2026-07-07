@@ -1,7 +1,10 @@
 import { getEmployeeUsers, getEmployeeById } from "./employees.repository.js";
 import * as meetingsRepo from "../meetings/meetings.repository.js";
 import * as projectsRepo from "../projects/projects.repository.js";
-import { enrichMeetings } from "../meetings/meetings.service.js";
+import {
+  enrichMeetingWithLatest,
+  enrichMeetings,
+} from "../meetings/meetings.service.js";
 import * as projectsService from "../projects/projects.service.js";
 
 export async function listEmployeeOptions() {
@@ -40,7 +43,28 @@ export async function getEmployeeMeeting(employeeId, meetingId) {
 
   const data = await meetingsRepo.findMeetingForEmployee(employeeId, meetingId);
   if (!data) return { error: "Meeting not found", status: 404 };
-  return { data };
+
+  const latestById = await meetingsRepo.getLatestUpdatesByMeetingIds([meetingId]);
+  const [enriched] = await enrichMeetings(
+    [enrichMeetingWithLatest(data, latestById[meetingId])],
+    { withLatest: false },
+  );
+  return { data: enriched };
+}
+
+export async function getEmployeeMeetingUpdates(employeeId, meetingId) {
+  const employee = await getEmployeeById(employeeId);
+  if (!employee) return { error: "Employee not found", status: 404 };
+
+  const meeting = await meetingsRepo.findMeetingForEmployee(employeeId, meetingId);
+  if (!meeting) return { error: "Meeting not found", status: 404 };
+
+  try {
+    const data = await meetingsRepo.listMeetingUpdates(meetingId);
+    return { data };
+  } catch (err) {
+    return { error: err.message, status: 500 };
+  }
 }
 
 export async function getEmployeeProject(employeeId, projectId) {
