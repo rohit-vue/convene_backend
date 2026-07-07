@@ -1,11 +1,12 @@
 import { Router } from "express";
-import { requireAuth, requireEmployee } from "../../middleware/auth.js";
+import { requireAuth, requireAdmin, requireEmployee } from "../../middleware/auth.js";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
 import * as projectsController from "./projects.controller.js";
 
 const router = Router();
 
 router.get("/", requireAuth, asyncHandler(projectsController.list));
+router.get("/export", requireAuth, requireAdmin, asyncHandler(projectsController.exportAll));
 router.post("/", requireAuth, requireEmployee, asyncHandler(projectsController.create));
 router.get("/:id/status-history", requireAuth, requireEmployee, asyncHandler(projectsController.getStatusHistory));
 router.get(

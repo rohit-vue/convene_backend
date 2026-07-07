@@ -13,6 +13,10 @@ function respond(res, result) {
   return res.json(result.data);
 }
 
+export async function exportAll(req, res) {
+  respond(res, await projectsService.exportProjects(req));
+}
+
 export async function list(req, res) {
   respond(res, await projectsService.listProjects(req));
 }

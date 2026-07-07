@@ -10,6 +10,10 @@ function respond(res, result) {
   return res.json(result.data);
 }
 
+export async function exportAll(req, res) {
+  respond(res, await meetingsService.exportMeetings(req));
+}
+
 export async function list(req, res) {
   try {
     const data = await meetingsService.listMeetings(req);

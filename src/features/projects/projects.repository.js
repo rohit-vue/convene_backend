@@ -196,6 +196,36 @@ export async function listByAssignee(employeeId) {
   return data || [];
 }
 
+export async function getLatestMilestonesByProjectIds(projectIds) {
+  if (!projectIds.length) return {};
+
+  const { data, error } = await supabase
+    .from("project_milestones")
+    .select("project_id, milestone_number, amount")
+    .in("project_id", projectIds)
+    .order("milestone_number", { ascending: false });
+
+  if (error) throw new Error(error.message);
+
+  const latestByProjectId = {};
+  for (const row of data || []) {
+    if (!latestByProjectId[row.project_id]) {
+      latestByProjectId[row.project_id] = row.amount;
+    }
+  }
+  return latestByProjectId;
+}
+
+export async function listAllProjectsForExport() {
+  const { data, error } = await supabase
+    .from("projects")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
 export async function getProfileNames(userIds) {
   if (!userIds.length) return {};
 
