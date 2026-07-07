@@ -5,7 +5,7 @@ import * as projectsController from "./projects.controller.js";
 
 const router = Router();
 
-router.get("/", requireAuth, requireEmployee, asyncHandler(projectsController.list));
+router.get("/", requireAuth, asyncHandler(projectsController.list));
 router.post("/", requireAuth, requireEmployee, asyncHandler(projectsController.create));
 router.get("/:id/status-history", requireAuth, requireEmployee, asyncHandler(projectsController.getStatusHistory));
 router.get("/:id/daily-logs", requireAuth, requireEmployee, asyncHandler(projectsController.getDailyLogs));

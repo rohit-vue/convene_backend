@@ -183,7 +183,7 @@ export async function assignMeeting(req, body) {
     return { error: "Admin access required", status: 403 };
   }
 
-  const { employee_id, project_name, client_name, upwork_account, meeting_at } = body;
+  const { employee_id, project_name, client_name, upwork_account, link_url, meeting_at } = body;
 
   if (!employee_id || !project_name || !client_name || !meeting_at) {
     return {
@@ -204,6 +204,7 @@ export async function assignMeeting(req, body) {
       client_name,
       employee_id,
       upwork_account: upwork_account || null,
+      link_url: link_url || null,
       meeting_at,
       assignment_status: "pending",
       assigned_by: req.user.id,
