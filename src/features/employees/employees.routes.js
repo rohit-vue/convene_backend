@@ -26,6 +26,18 @@ router.get(
   asyncHandler(employeesController.getProjectStatusHistory),
 );
 router.get(
+  "/:employeeId/projects/:projectId/milestone-cost-history",
+  requireAuth,
+  requireAdmin,
+  asyncHandler(employeesController.getProjectMilestones),
+);
+router.get(
+  "/:employeeId/projects/:projectId/milestones",
+  requireAuth,
+  requireAdmin,
+  asyncHandler(employeesController.getProjectMilestones),
+);
+router.get(
   "/:employeeId/projects/:projectId/daily-logs",
   requireAuth,
   requireAdmin,

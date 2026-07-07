@@ -67,6 +67,60 @@ export async function getStatusHistory(projectId) {
   return rows || [];
 }
 
+export async function insertMilestoneCostHistory(row) {
+  const { error } = await supabase.from("project_milestone_cost_history").insert(row);
+  if (error) throw new Error(error.message);
+}
+
+export async function getMilestoneCostHistory(projectId) {
+  const { data: rows, error } = await supabase
+    .from("project_milestone_cost_history")
+    .select("id, from_cost, to_cost, comment, changed_by, created_at")
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return rows || [];
+}
+
+export async function listMilestones(projectId) {
+  const { data: rows, error } = await supabase
+    .from("project_milestones")
+    .select(
+      "id, project_id, milestone_number, amount, comment, status, created_by, created_at, completed_at",
+    )
+    .eq("project_id", projectId)
+    .order("milestone_number", { ascending: true });
+  if (error) throw new Error(error.message);
+  return rows || [];
+}
+
+export async function getActiveMilestone(projectId) {
+  const { data, error } = await supabase
+    .from("project_milestones")
+    .select("id, milestone_number, amount")
+    .eq("project_id", projectId)
+    .eq("status", "active")
+    .order("milestone_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function insertMilestone(row) {
+  const { data, error } = await supabase.from("project_milestones").insert(row).select().single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function completeMilestone(milestoneId, completedAt) {
+  const { error } = await supabase
+    .from("project_milestones")
+    .update({ status: "completed", completed_at: completedAt })
+    .eq("id", milestoneId);
+  if (error) throw new Error(error.message);
+}
+
 export async function getDailyLogs(projectId) {
   const { data: rows, error } = await supabase
     .from("project_daily_logs")

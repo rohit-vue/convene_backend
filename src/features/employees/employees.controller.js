@@ -63,6 +63,26 @@ export async function getProjectStatusHistory(req, res) {
   );
 }
 
+export async function getProjectMilestoneCostHistory(req, res) {
+  respond(
+    res,
+    await employeesService.getEmployeeProjectMilestones(
+      req.params.employeeId,
+      req.params.projectId,
+    ),
+  );
+}
+
+export async function getProjectMilestones(req, res) {
+  respond(
+    res,
+    await employeesService.getEmployeeProjectMilestones(
+      req.params.employeeId,
+      req.params.projectId,
+    ),
+  );
+}
+
 export async function getProjectDailyLogs(req, res) {
   respond(
     res,
