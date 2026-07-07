@@ -29,6 +29,22 @@ export async function getStatusHistory(req, res) {
   respond(res, await projectsService.getStatusHistory(req, req.params.id));
 }
 
+export async function listMilestones(req, res) {
+  respond(res, await projectsService.listMilestones(req, req.params.id));
+}
+
+export async function addMilestone(req, res) {
+  respond(res, await projectsService.addMilestone(req, req.params.id, req.body));
+}
+
+export async function getMilestoneCostHistory(req, res) {
+  respond(res, await projectsService.listMilestones(req, req.params.id));
+}
+
+export async function changeMilestoneCost(req, res) {
+  respond(res, await projectsService.addMilestone(req, req.params.id, req.body));
+}
+
 export async function getDailyLogs(req, res) {
   respond(res, await projectsService.getDailyLogs(req, req.params.id));
 }

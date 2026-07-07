@@ -4,6 +4,7 @@ import {
   projectPayload,
   dailyLogPayload,
   validateDailyLogFields,
+  validateMilestoneCostChange,
 } from "./projects.validator.js";
 import * as projectsRepo from "./projects.repository.js";
 import { scopeProjects } from "../../shared/query-scope.js";
@@ -15,6 +16,24 @@ export async function getProjectForUser(req, projectId) {
     return { error: "Forbidden", status: 403 };
   }
   return { data };
+}
+
+async function enrichMilestones(rows) {
+  const userIds = [...new Set((rows || []).map((row) => row.created_by))];
+  const nameById = await projectsRepo.getProfileNames(userIds);
+  return (rows || []).map((row) => ({
+    ...row,
+    created_by_name: nameById[row.created_by] || null,
+  }));
+}
+
+async function enrichMilestoneCostHistory(rows) {
+  const userIds = [...new Set((rows || []).map((row) => row.changed_by))];
+  const nameById = await projectsRepo.getProfileNames(userIds);
+  return (rows || []).map((row) => ({
+    ...row,
+    changed_by_name: nameById[row.changed_by] || null,
+  }));
 }
 
 async function enrichStatusHistory(rows) {
@@ -99,6 +118,76 @@ export async function createProject(req, body) {
 
 export async function getProject(req, projectId) {
   return getProjectForUser(req, projectId);
+}
+
+export async function listMilestones(req, projectId) {
+  const result = await getProjectForUser(req, projectId);
+  if (result.error) return result;
+
+  try {
+    const rows = await projectsRepo.listMilestones(projectId);
+    const data = await enrichMilestones(rows);
+    return { data };
+  } catch (err) {
+    return { error: err.message, status: 500 };
+  }
+}
+
+export async function addMilestone(req, projectId, body) {
+  const result = await getProjectForUser(req, projectId);
+  if (result.error) return result;
+
+  if (result.data.job_type !== "contract") {
+    return { error: "Milestones apply only to contract projects", status: 400 };
+  }
+
+  if (result.data.status !== "active") {
+    return {
+      error: "Milestones can only be added while the project status is active",
+      status: 400,
+    };
+  }
+
+  const { errors, milestoneCost, comment } = validateMilestoneCostChange(body);
+  if (errors.length) {
+    return { error: errors[0], status: 400 };
+  }
+
+  try {
+    const existing = await projectsRepo.listMilestones(projectId);
+    const active = existing.find((row) => row.status === "active");
+    const nextNumber = existing.length
+      ? Math.max(...existing.map((row) => row.milestone_number)) + 1
+      : 1;
+    const now = new Date().toISOString();
+
+    if (active) {
+      await projectsRepo.completeMilestone(active.id, now);
+    }
+
+    const milestone = await projectsRepo.insertMilestone({
+      project_id: projectId,
+      milestone_number: nextNumber,
+      amount: milestoneCost,
+      comment,
+      status: "active",
+      created_by: req.user.id,
+    });
+
+    await projectsRepo.update(projectId, {
+      milestone_cost: milestoneCost,
+      updated_at: now,
+    });
+
+    const [enriched] = await enrichMilestones([milestone]);
+    return { data: enriched, status: 201 };
+  } catch (err) {
+    return { error: err.message, status: 400 };
+  }
+}
+
+export async function changeMilestoneCost(req, projectId, body) {
+  return addMilestone(req, projectId, body);
 }
 
 export async function getStatusHistory(req, projectId) {
@@ -198,9 +287,10 @@ export async function changeStatus(req, projectId, body) {
   const fromStatus = result.data.status;
 
   try {
+    const now = new Date().toISOString();
     const data = await projectsRepo.update(projectId, {
       status,
-      updated_at: new Date().toISOString(),
+      updated_at: now,
     });
 
     try {
@@ -214,9 +304,16 @@ export async function changeStatus(req, projectId, body) {
     } catch (historyErr) {
       await projectsRepo.update(projectId, {
         status: fromStatus,
-        updated_at: new Date().toISOString(),
+        updated_at: now,
       });
       return { error: historyErr.message, status: 500 };
+    }
+
+    if (status === "completed") {
+      const active = await projectsRepo.getActiveMilestone(projectId);
+      if (active) {
+        await projectsRepo.completeMilestone(active.id, now);
+      }
     }
 
     return { data };
@@ -226,7 +323,7 @@ export async function changeStatus(req, projectId, body) {
 }
 
 export async function patchProject(req, projectId, body) {
-  const existing = await projectsRepo.findCreatedBy(projectId);
+  const existing = await projectsRepo.findById(projectId);
   if (!existing) return { error: "Project not found", status: 404 };
   if (!req.isAdmin && existing.created_by !== req.user.id) {
     return { error: "Forbidden", status: 403 };
@@ -239,16 +336,38 @@ export async function patchProject(req, projectId, body) {
     };
   }
 
+  if (body.milestone_cost !== undefined) {
+    return {
+      error: "Use POST /api/projects/:id/milestones to add a milestone with a comment",
+      status: 400,
+    };
+  }
+
+  const mergedJobType = body.job_type ?? existing.job_type;
+  const hourlyRateProvided =
+    body.hourly_rate !== undefined &&
+    body.hourly_rate !== null &&
+    body.hourly_rate !== "";
+  if (hourlyRateProvided && mergedJobType !== "hourly") {
+    return { error: "hourly_rate is only allowed for hourly projects", status: 400 };
+  }
+
   const validationErrors = validateProjectFields(body, { partial: true });
   if (validationErrors.length) {
     return { error: validationErrors[0], status: 400 };
   }
 
+  const updates = {
+    ...projectPayload(body),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (mergedJobType === "contract") {
+    updates.hourly_rate = null;
+  }
+
   try {
-    const data = await projectsRepo.update(projectId, {
-      ...projectPayload(body),
-      updated_at: new Date().toISOString(),
-    });
+    const data = await projectsRepo.update(projectId, updates);
     return { data };
   } catch (err) {
     return { error: err.message, status: 400 };
@@ -268,6 +387,15 @@ export async function deleteProject(req, projectId) {
   } catch (err) {
     return { error: err.message, status: 400 };
   }
+}
+
+export async function listMilestonesForEmployeeProject(projectId) {
+  const rows = await projectsRepo.listMilestones(projectId);
+  return enrichMilestones(rows);
+}
+
+export async function getMilestoneCostHistoryForEmployeeProject(projectId) {
+  return listMilestonesForEmployeeProject(projectId);
 }
 
 export async function getStatusHistoryForEmployeeProject(projectId) {

@@ -91,6 +91,25 @@ export async function getEmployeeProjectStatusHistory(employeeId, projectId) {
   }
 }
 
+export async function getEmployeeProjectMilestones(employeeId, projectId) {
+  const employee = await getEmployeeById(employeeId);
+  if (!employee) return { error: "Employee not found", status: 404 };
+
+  const project = await projectsRepo.findIdForEmployee(employeeId, projectId);
+  if (!project) return { error: "Project not found", status: 404 };
+
+  try {
+    const data = await projectsService.listMilestonesForEmployeeProject(projectId);
+    return { data };
+  } catch (err) {
+    return { error: err.message, status: 500 };
+  }
+}
+
+export async function getEmployeeProjectMilestoneCostHistory(employeeId, projectId) {
+  return getEmployeeProjectMilestones(employeeId, projectId);
+}
+
 export async function getEmployeeProjectDailyLogs(employeeId, projectId) {
   const employee = await getEmployeeById(employeeId);
   if (!employee) return { error: "Employee not found", status: 404 };
