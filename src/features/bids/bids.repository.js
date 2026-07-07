@@ -16,8 +16,25 @@ export async function listAll({ upworkAccount } = {}) {
   return data || [];
 }
 
+export async function findById(id) {
+  const { data, error } = await supabase.from("upwork_bids").select("*").eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 export async function insert(row) {
   const { data, error } = await supabase.from("upwork_bids").insert(row).select().single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function remove(id) {
+  const { error } = await supabase.from("upwork_bids").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function update(id, row) {
+  const { data, error } = await supabase.from("upwork_bids").update(row).eq("id", id).select().single();
   if (error) throw new Error(error.message);
   return data;
 }
