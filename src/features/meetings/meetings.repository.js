@@ -68,6 +68,11 @@ export async function findEmployeeProfile(employeeId) {
   return data;
 }
 
+export async function deleteMeetingUpdates(meetingId) {
+  const { error } = await supabase.from("meeting_updates").delete().eq("meeting_id", meetingId);
+  if (error) throw new Error(error.message);
+}
+
 export async function deleteMeeting(id) {
   const { error } = await supabase.from("meetings").delete().eq("id", id);
   if (error) throw new Error(error.message);

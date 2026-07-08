@@ -102,9 +102,29 @@ export function validateMilestoneCostChange(body) {
   return { errors, milestoneCost, comment };
 }
 
+export function validateMilestoneUpdate(body) {
+  const comment = String(body.comment || "").trim();
+  const amount = parseMoneyAmount(body.amount ?? body.milestone_cost);
+
+  if (!comment) return { error: "comment is required" };
+  if (amount === null || amount < 0) {
+    return { error: "amount must be a non-negative number" };
+  }
+
+  return { comment, amount };
+}
+
 function isFutureLogDate(logDate) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(logDate)) return false;
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   return logDate > today;
+}
+
+/** Normalize a date-only value to a stable ISO timestamp (noon UTC). */
+export function dateOnlyToTimestamp(value) {
+  if (!value) return null;
+  const dateKey = String(value).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return null;
+  return `${dateKey}T12:00:00.000Z`;
 }

@@ -387,6 +387,24 @@ export async function createUpdate(req, meetingId, body) {
   }
 }
 
+export async function deleteMeetingById(req, meetingId) {
+  const result = await getMeetingForUser(req, meetingId);
+  if (result.error) return result;
+
+  if (!req.isAdmin && result.data.employee_id !== req.user.id && result.data.created_by !== req.user.id) {
+    return { error: "Forbidden", status: 403 };
+  }
+
+  try {
+    await notificationsRepo.deleteNotificationsForMeeting(meetingId);
+    await meetingsRepo.deleteMeetingUpdates(meetingId);
+    await meetingsRepo.deleteMeeting(meetingId);
+    return { status: 204 };
+  } catch (err) {
+    return { error: err.message, status: 400 };
+  }
+}
+
 export async function updateUpdate(req, meetingId, updateId, body) {
   const result = await getMeetingForUser(req, meetingId);
   if (result.error) return result;
