@@ -6,6 +6,6 @@ export const UPWORK_ACCOUNTS = [
   "Siddhart Srivastav",
 ];
 
-export const BID_STATUSES = ["applied", "canceled", "accepted"];
+export const BID_STATUSES = ["applied", "invited", "canceled", "accepted"];
 
 export const BID_JOB_TYPES = ["fixed", "hourly"];
