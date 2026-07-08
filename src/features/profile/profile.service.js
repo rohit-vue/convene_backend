@@ -1,4 +1,7 @@
 import { supabase } from "../../config/supabase.js";
+import { env } from "../../config/env.js";
+
+const AVATAR_BUCKET = "avatars";
 
 function normalizeMemberSince(value) {
   if (value === undefined) return undefined;
@@ -10,10 +13,19 @@ function normalizeMemberSince(value) {
   return date;
 }
 
+function isValidAvatarUrl(userId, value) {
+  if (value === null || value === "") return true;
+  const url = String(value).trim();
+  if (!url) return true;
+
+  const prefix = `${env.supabaseUrl}/storage/v1/object/public/${AVATAR_BUCKET}/${userId}/`;
+  return url.startsWith(prefix);
+}
+
 export async function getProfile(userId) {
   const { data: profile, error } = await supabase
     .from("profiles")
-    .select("full_name, role, employee_code, job_title, member_since")
+    .select("full_name, role, employee_code, job_title, member_since, avatar_url")
     .eq("id", userId)
     .single();
 
@@ -28,13 +40,14 @@ export async function getProfile(userId) {
     employee_code: profile?.employee_code ?? null,
     job_title: profile?.job_title ?? null,
     member_since: profile?.member_since ?? null,
+    avatar_url: profile?.avatar_url ?? null,
     email: authData.user?.email ?? null,
     created_at: authData.user?.created_at ?? null,
   };
 }
 
 export async function updateProfile(userId, body) {
-  const { full_name, employee_code, job_title, member_since } = body ?? {};
+  const { full_name, employee_code, job_title, member_since, avatar_url } = body ?? {};
   const updates = {};
 
   if (full_name !== undefined) {
@@ -51,6 +64,15 @@ export async function updateProfile(userId, body) {
     if (normalized?.error) return normalized;
     updates.member_since = normalized;
   }
+  if (avatar_url !== undefined) {
+    const normalized = avatar_url === null || avatar_url === ""
+      ? null
+      : String(avatar_url).trim() || null;
+    if (normalized && !isValidAvatarUrl(userId, normalized)) {
+      return { error: "Invalid avatar URL", status: 400 };
+    }
+    updates.avatar_url = normalized;
+  }
 
   if (!Object.keys(updates).length) {
     return { error: "No fields to update", status: 400 };
@@ -60,7 +82,7 @@ export async function updateProfile(userId, body) {
     .from("profiles")
     .update(updates)
     .eq("id", userId)
-    .select("full_name, role, employee_code, job_title, member_since")
+    .select("full_name, role, employee_code, job_title, member_since, avatar_url")
     .single();
 
   if (error) throw new Error(error.message);
