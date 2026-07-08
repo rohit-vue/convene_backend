@@ -16,5 +16,6 @@ router.post("/:id/updates", requireAuth, asyncHandler(meetingsController.createU
 router.put("/:id/updates/:updateId", requireAuth, asyncHandler(meetingsController.updateUpdate));
 router.get("/:id", requireAuth, asyncHandler(meetingsController.getById));
 router.put("/:id", requireAuth, asyncHandler(meetingsController.update));
+router.delete("/:id", requireAuth, requireEmployee, asyncHandler(meetingsController.remove));
 
 export default router;

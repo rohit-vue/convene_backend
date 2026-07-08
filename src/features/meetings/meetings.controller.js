@@ -7,6 +7,9 @@ function respond(res, result) {
   if (result.status === 201) {
     return res.status(201).json(result.data);
   }
+  if (result.status === 204) {
+    return res.status(204).end();
+  }
   return res.json(result.data);
 }
 
@@ -65,4 +68,8 @@ export async function updateUpdate(req, res) {
     res,
     await meetingsService.updateUpdate(req, req.params.id, req.params.updateId, req.body),
   );
+}
+
+export async function remove(req, res) {
+  respond(res, await meetingsService.deleteMeetingById(req, req.params.id));
 }

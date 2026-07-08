@@ -48,6 +48,20 @@ export async function update(projectId, updates) {
 }
 
 export async function remove(projectId) {
+  const childTables = [
+    "notifications",
+    "project_shares",
+    "project_daily_logs",
+    "project_milestones",
+    "project_milestone_cost_history",
+    "project_status_history",
+  ];
+
+  for (const table of childTables) {
+    const { error } = await supabase.from(table).delete().eq("project_id", projectId);
+    if (error) throw new Error(error.message);
+  }
+
   const { error } = await supabase.from("projects").delete().eq("id", projectId);
   if (error) throw new Error(error.message);
 }
@@ -145,6 +159,35 @@ export async function completeMilestone(milestoneId, completedAt) {
   if (error) throw new Error(error.message);
 }
 
+export async function findMilestone(projectId, milestoneId) {
+  const { data, error } = await supabase
+    .from("project_milestones")
+    .select(
+      "id, project_id, milestone_number, amount, comment, status, created_by, created_at, completed_at",
+    )
+    .eq("id", milestoneId)
+    .eq("project_id", projectId)
+    .single();
+  if (error || !data) return null;
+  return data;
+}
+
+export async function updateMilestone(milestoneId, updates) {
+  const { data, error } = await supabase
+    .from("project_milestones")
+    .update(updates)
+    .eq("id", milestoneId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function removeMilestone(milestoneId) {
+  const { error } = await supabase.from("project_milestones").delete().eq("id", milestoneId);
+  if (error) throw new Error(error.message);
+}
+
 export async function getDailyLogs(projectId) {
   const { data: rows, error } = await supabase
     .from("project_daily_logs")
@@ -161,7 +204,7 @@ export async function getDailyLogs(projectId) {
 export async function findDailyLog(projectId, logId) {
   const { data, error } = await supabase
     .from("project_daily_logs")
-    .select("id, project_id, created_by")
+    .select("id, project_id, log_date, tasks_done, tracker_minutes, created_by")
     .eq("id", logId)
     .eq("project_id", projectId)
     .single();
@@ -184,6 +227,15 @@ export async function updateDailyLog(logId, updates) {
     .single();
   if (error) throw new Error(error.message);
   return data;
+}
+
+export async function removeDailyLog(projectId, logId) {
+  const { error } = await supabase
+    .from("project_daily_logs")
+    .delete()
+    .eq("id", logId)
+    .eq("project_id", projectId);
+  if (error) throw new Error(error.message);
 }
 
 export async function findForEmployee(employeeId, projectId) {

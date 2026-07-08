@@ -53,6 +53,20 @@ export async function addMilestone(req, res) {
   respond(res, await projectsService.addMilestone(req, req.params.id, req.body));
 }
 
+export async function updateMilestone(req, res) {
+  respond(
+    res,
+    await projectsService.updateMilestone(req, req.params.id, req.params.milestoneId, req.body),
+  );
+}
+
+export async function deleteMilestone(req, res) {
+  respond(
+    res,
+    await projectsService.deleteMilestone(req, req.params.id, req.params.milestoneId),
+  );
+}
+
 export async function getMilestoneCostHistory(req, res) {
   respond(res, await projectsService.listMilestones(req, req.params.id));
 }
@@ -73,6 +87,13 @@ export async function updateDailyLog(req, res) {
   respond(
     res,
     await projectsService.updateDailyLog(req, req.params.id, req.params.logId, req.body),
+  );
+}
+
+export async function deleteDailyLog(req, res) {
+  respond(
+    res,
+    await projectsService.deleteDailyLog(req, req.params.id, req.params.logId),
   );
 }
 

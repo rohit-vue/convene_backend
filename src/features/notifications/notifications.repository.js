@@ -63,3 +63,13 @@ export async function markNotificationsReadForProject(userId, projectId) {
 
   if (error) throw new Error(error.message);
 }
+
+export async function deleteNotificationsForProject(projectId) {
+  const { error } = await supabase.from("notifications").delete().eq("project_id", projectId);
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteNotificationsForMeeting(meetingId) {
+  const { error } = await supabase.from("notifications").delete().eq("meeting_id", meetingId);
+  if (error) throw new Error(error.message);
+}

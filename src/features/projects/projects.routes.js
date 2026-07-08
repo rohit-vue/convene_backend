@@ -22,6 +22,7 @@ router.get("/:id/milestones", requireAuth, requireEmployee, asyncHandler(project
 router.get("/:id/daily-logs", requireAuth, requireEmployee, asyncHandler(projectsController.getDailyLogs));
 router.post("/:id/daily-logs", requireAuth, requireEmployee, asyncHandler(projectsController.createDailyLog));
 router.put("/:id/daily-logs/:logId", requireAuth, requireEmployee, asyncHandler(projectsController.updateDailyLog));
+router.delete("/:id/daily-logs/:logId", requireAuth, requireEmployee, asyncHandler(projectsController.deleteDailyLog));
 router.post("/:id/status", requireAuth, requireEmployee, asyncHandler(projectsController.changeStatus));
 router.post(
   "/:id/milestone-cost",
@@ -30,6 +31,8 @@ router.post(
   asyncHandler(projectsController.addMilestone),
 );
 router.post("/:id/milestones", requireAuth, requireEmployee, asyncHandler(projectsController.addMilestone));
+router.put("/:id/milestones/:milestoneId", requireAuth, requireEmployee, asyncHandler(projectsController.updateMilestone));
+router.delete("/:id/milestones/:milestoneId", requireAuth, requireEmployee, asyncHandler(projectsController.deleteMilestone));
 router.get("/:id/shares", requireAuth, requireEmployee, asyncHandler(projectsController.listShares));
 router.post("/:id/shares", requireAuth, requireEmployee, asyncHandler(projectsController.share));
 router.patch(

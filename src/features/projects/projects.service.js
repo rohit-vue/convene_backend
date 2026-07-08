@@ -5,7 +5,9 @@ import {
   dailyLogPayload,
   validateDailyLogFields,
   validateMilestoneCostChange,
+  validateMilestoneUpdate,
   parseMoneyAmount,
+  dateOnlyToTimestamp,
 } from "./projects.validator.js";
 import * as projectsRepo from "./projects.repository.js";
 import { scopeProjects } from "../../shared/query-scope.js";
@@ -67,6 +69,21 @@ function requireLogEditAccess(access) {
     return { error: "You do not have permission to edit daily logs", status: 403 };
   }
   return null;
+}
+
+function canManageDailyLog(access, log, userId) {
+  if (!access.can_edit_logs) return false;
+  if (access.can_edit_project || access.role === "admin") return true;
+  return log.created_by === userId;
+}
+
+function effectiveTimestampForProjectStart(startDate, fallback) {
+  return dateOnlyToTimestamp(startDate) || fallback;
+}
+
+async function wasProjectEverActive(projectId) {
+  const history = await projectsRepo.getStatusHistory(projectId);
+  return history.some((row) => row.to_status === "active");
 }
 
 async function enrichMilestones(rows) {
@@ -217,6 +234,11 @@ export async function createProject(req, body) {
       accepted_at: new Date().toISOString(),
     });
 
+    const createdAt =
+      data.status === "active"
+        ? effectiveTimestampForProjectStart(data.start_date, new Date().toISOString())
+        : new Date().toISOString();
+
     try {
       await projectsRepo.insertStatusHistory({
         project_id: data.id,
@@ -224,6 +246,7 @@ export async function createProject(req, body) {
         to_status: data.status,
         comment: "Project created",
         changed_by: req.user.id,
+        created_at: createdAt,
       });
     } catch (historyErr) {
       return { error: historyErr.message, status: 500 };
@@ -416,6 +439,11 @@ export async function addMilestone(req, projectId, body) {
       await projectsRepo.completeMilestone(active.id, now);
     }
 
+    const milestoneCreatedAt =
+      nextNumber === 1
+        ? effectiveTimestampForProjectStart(result.project.start_date, now)
+        : now;
+
     const milestone = await projectsRepo.insertMilestone({
       project_id: projectId,
       milestone_number: nextNumber,
@@ -423,6 +451,7 @@ export async function addMilestone(req, projectId, body) {
       comment,
       status: "active",
       created_by: req.user.id,
+      created_at: milestoneCreatedAt,
     });
 
     await projectsRepo.update(projectId, {
@@ -439,6 +468,81 @@ export async function addMilestone(req, projectId, body) {
 
 export async function changeMilestoneCost(req, projectId, body) {
   return addMilestone(req, projectId, body);
+}
+
+async function syncProjectMilestoneCost(projectId) {
+  const milestones = await projectsRepo.listMilestones(projectId);
+  const active = milestones.find((row) => row.status === "active");
+  await projectsRepo.update(projectId, {
+    milestone_cost: active?.amount ?? null,
+    updated_at: new Date().toISOString(),
+  });
+}
+
+export async function updateMilestone(req, projectId, milestoneId, body) {
+  const result = await requireProjectAccess(req, projectId);
+  if (result.error) return result;
+  const ownerError = requireOwnerAccess(result.access);
+  if (ownerError) return ownerError;
+
+  if (result.project.job_type !== "contract") {
+    return { error: "Milestones apply only to contract projects", status: 400 };
+  }
+
+  const existing = await projectsRepo.findMilestone(projectId, milestoneId);
+  if (!existing) return { error: "Milestone not found", status: 404 };
+
+  const validation = validateMilestoneUpdate(body);
+  if (validation.error) {
+    return { error: validation.error, status: 400 };
+  }
+
+  try {
+    const milestone = await projectsRepo.updateMilestone(milestoneId, {
+      comment: validation.comment,
+      amount: validation.amount,
+    });
+
+    if (existing.status === "active") {
+      await projectsRepo.update(projectId, {
+        milestone_cost: validation.amount,
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    const [enriched] = await enrichMilestones([milestone]);
+    return { data: enriched };
+  } catch (err) {
+    return { error: err.message, status: 400 };
+  }
+}
+
+export async function deleteMilestone(req, projectId, milestoneId) {
+  const result = await requireProjectAccess(req, projectId);
+  if (result.error) return result;
+  const ownerError = requireOwnerAccess(result.access);
+  if (ownerError) return ownerError;
+
+  if (result.project.job_type !== "contract") {
+    return { error: "Milestones apply only to contract projects", status: 400 };
+  }
+
+  const existing = await projectsRepo.findMilestone(projectId, milestoneId);
+  if (!existing) return { error: "Milestone not found", status: 404 };
+
+  const allMilestones = await projectsRepo.listMilestones(projectId);
+  const latestNumber = Math.max(...allMilestones.map((row) => row.milestone_number));
+  if (existing.milestone_number !== latestNumber) {
+    return { error: "Only the most recent milestone can be deleted", status: 400 };
+  }
+
+  try {
+    await projectsRepo.removeMilestone(milestoneId);
+    await syncProjectMilestoneCost(projectId);
+    return { status: 204 };
+  } catch (err) {
+    return { error: err.message, status: 400 };
+  }
 }
 
 export async function getStatusHistory(req, projectId) {
@@ -501,24 +605,44 @@ export async function updateDailyLog(req, projectId, logId, body) {
 
   const existing = await projectsRepo.findDailyLog(projectId, logId);
   if (!existing) return { error: "Daily log not found", status: 404 };
-  if (existing.created_by !== req.user.id) {
+  if (!canManageDailyLog(result.access, existing, req.user.id)) {
     return { error: "Forbidden", status: 403 };
   }
 
-  const validationErrors = validateDailyLogFields(body, { jobType: result.project.job_type });
-  if (validationErrors.length) {
-    return { error: validationErrors[0], status: 400 };
+  const tasksDone = String(body.tasks_done || "").trim();
+  if (!tasksDone) {
+    return { error: "tasks_done is required", status: 400 };
   }
-
-  const payload = dailyLogPayload(body, { jobType: result.project.job_type });
 
   try {
     const data = await projectsRepo.updateDailyLog(logId, {
-      ...payload,
+      log_date: existing.log_date,
+      tasks_done: tasksDone,
+      tracker_minutes: existing.tracker_minutes ?? 0,
       updated_by: req.user.id,
       updated_at: new Date().toISOString(),
     });
     return { data };
+  } catch (err) {
+    return { error: err.message, status: 400 };
+  }
+}
+
+export async function deleteDailyLog(req, projectId, logId) {
+  const result = await requireProjectAccess(req, projectId);
+  if (result.error) return result;
+  const logError = requireLogEditAccess(result.access);
+  if (logError) return logError;
+
+  const existing = await projectsRepo.findDailyLog(projectId, logId);
+  if (!existing) return { error: "Daily log not found", status: 404 };
+  if (!canManageDailyLog(result.access, existing, req.user.id)) {
+    return { error: "Forbidden", status: 403 };
+  }
+
+  try {
+    await projectsRepo.removeDailyLog(projectId, logId);
+    return { status: 204 };
   } catch (err) {
     return { error: err.message, status: 400 };
   }
@@ -545,6 +669,13 @@ export async function changeStatus(req, projectId, body) {
 
   try {
     const now = new Date().toISOString();
+    const latestProject = await projectsRepo.findById(projectId);
+    const projectStartDate = latestProject?.start_date ?? result.project.start_date;
+    const isFirstActivation = status === "active" && !(await wasProjectEverActive(projectId));
+    const statusHistoryAt = isFirstActivation
+      ? effectiveTimestampForProjectStart(projectStartDate, now)
+      : now;
+
     const data = await projectsRepo.update(projectId, {
       status,
       updated_at: now,
@@ -557,6 +688,7 @@ export async function changeStatus(req, projectId, body) {
         to_status: status,
         comment: String(comment).trim(),
         changed_by: req.user.id,
+        created_at: statusHistoryAt,
       });
     } catch (historyErr) {
       await projectsRepo.update(projectId, {
