@@ -6,7 +6,6 @@ import * as meetingsController from "./meetings.controller.js";
 const router = Router();
 
 router.get("/pending", requireAuth, asyncHandler(meetingsController.listPending));
-router.get("/export", requireAuth, requireAdmin, asyncHandler(meetingsController.exportAll));
 router.post("/assign", requireAuth, requireAdmin, asyncHandler(meetingsController.assign));
 router.patch("/:id/accept", requireAuth, requireEmployee, asyncHandler(meetingsController.accept));
 router.get("/", requireAuth, asyncHandler(meetingsController.list));
