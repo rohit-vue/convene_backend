@@ -22,6 +22,18 @@ export async function findById(id) {
   return data;
 }
 
+export async function findByJobLinkAndAccount(jobLink, upworkAccount) {
+  const { data, error } = await supabase
+    .from("upwork_bids")
+    .select("*")
+    .eq("job_link", jobLink)
+    .eq("upwork_account", upworkAccount)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 export async function insert(row) {
   const { data, error } = await supabase.from("upwork_bids").insert(row).select().single();
   if (error) throw new Error(error.message);
