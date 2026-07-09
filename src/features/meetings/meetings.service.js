@@ -65,67 +65,6 @@ export async function syncParentMeetingFromLatestUpdate(meetingId, updatedBy) {
     .eq("id", meetingId);
 }
 
-export async function exportMeetings(req) {
-  if (!req.isAdmin) {
-    return { error: "Admin access required", status: 403 };
-  }
-
-  const meetings = await meetingsRepo.listAllMeetingsForExport();
-  const nameById = await meetingsRepo.getEmployeeNamesByIds(meetings.map((m) => m.employee_id));
-  const updates = await meetingsRepo.listMeetingUpdatesByMeetingIds(meetings.map((m) => m.id));
-
-  const updatesByMeetingId = {};
-  for (const update of updates) {
-    if (!updatesByMeetingId[update.meeting_id]) updatesByMeetingId[update.meeting_id] = [];
-    updatesByMeetingId[update.meeting_id].push(update);
-  }
-
-  const rows = [];
-  for (const meeting of meetings) {
-    const employeeName = meeting.employee_id ? nameById[meeting.employee_id] || null : null;
-    const meetingUpdates = updatesByMeetingId[meeting.id] || [];
-
-    const base = {
-      employee_name: employeeName,
-      project_name: meeting.project_name,
-      client_name: meeting.client_name,
-      upwork_account: meeting.upwork_account,
-      project_type: meeting.project_type,
-      job_description: meeting.job_description,
-      link_url: meeting.link_url,
-      assignment_status: meeting.assignment_status,
-    };
-
-    if (meetingUpdates.length) {
-      for (const update of meetingUpdates) {
-        rows.push({
-          ...base,
-          meeting_at: update.meeting_at,
-          duration_minutes: update.duration_minutes,
-          meeting_outcome: update.meeting_outcome,
-          budget_discussed: update.budget_discussed,
-          deadline: update.deadline,
-          notes: update.notes,
-          requirements_discussed: update.requirements_discussed,
-        });
-      }
-    } else {
-      rows.push({
-        ...base,
-        meeting_at: meeting.meeting_at,
-        duration_minutes: meeting.duration_minutes,
-        meeting_outcome: meeting.meeting_outcome,
-        budget_discussed: meeting.budget_discussed,
-        deadline: meeting.deadline,
-        notes: meeting.notes,
-        requirements_discussed: meeting.requirements_discussed,
-      });
-    }
-  }
-
-  return { data: rows };
-}
-
 export async function listMeetings(req) {
   const acceptedOnly = !req.isAdmin;
   const data = await meetingsRepo.listMeetingsForUser(req, { acceptedOnly });

@@ -158,29 +158,6 @@ export async function findMeetingForEmployee(employeeId, meetingId) {
   return data;
 }
 
-export async function listAllMeetingsForExport() {
-  const { data, error } = await supabase
-    .from("meetings")
-    .select("*")
-    .order("meeting_at", { ascending: false });
-
-  if (error) throw new Error(error.message);
-  return data || [];
-}
-
-export async function listMeetingUpdatesByMeetingIds(meetingIds) {
-  if (!meetingIds.length) return [];
-
-  const { data, error } = await supabase
-    .from("meeting_updates")
-    .select("*")
-    .in("meeting_id", meetingIds)
-    .order("meeting_at", { ascending: false });
-
-  if (error) throw new Error(error.message);
-  return data || [];
-}
-
 export async function listMeetingsByEmployeeId(employeeId) {
   const { data, error } = await supabase
     .from("meetings")
