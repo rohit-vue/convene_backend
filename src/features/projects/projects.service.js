@@ -531,6 +531,45 @@ export async function getDailyLogs(req, projectId) {
   }
 }
 
+export async function listAllDailyLogs(req) {
+  if (!req.isAdmin) {
+    return { error: "Admin access required", status: 403 };
+  }
+
+  try {
+    const rows = await projectsRepo.listAllDailyLogs();
+    const projectIds = [...new Set((rows || []).map((row) => row.project_id).filter(Boolean))];
+    const projects = await projectsRepo.getProjectsSummaryByIds(projectIds);
+    const projectById = Object.fromEntries((projects || []).map((p) => [p.id, p]));
+
+    const userIds = [
+      ...new Set([
+        ...(rows || []).flatMap((row) => [row.created_by, row.updated_by].filter(Boolean)),
+        ...(projects || []).map((p) => p.assigned_to).filter(Boolean),
+      ]),
+    ];
+    const nameById = await projectsRepo.getProfileNames(userIds);
+
+    const data = (rows || []).map((row) => {
+      const project = projectById[row.project_id] || {};
+      return {
+        ...row,
+        logged_by_name: nameById[row.created_by] || null,
+        updated_by_name: nameById[row.updated_by] || null,
+        project_name: project.name || null,
+        client_name: project.client_name || null,
+        job_type: project.job_type || null,
+        assigned_to: project.assigned_to || null,
+        assignee_name: project.assigned_to ? nameById[project.assigned_to] || null : null,
+      };
+    });
+
+    return { data };
+  } catch (err) {
+    return { error: err.message, status: 500 };
+  }
+}
+
 export async function createDailyLog(req, projectId, body) {
   const result = await requireProjectAccess(req, projectId);
   if (result.error) return result;

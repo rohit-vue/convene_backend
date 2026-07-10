@@ -201,6 +201,28 @@ export async function getDailyLogs(projectId) {
   return rows || [];
 }
 
+export async function listAllDailyLogs() {
+  const { data: rows, error } = await supabase
+    .from("project_daily_logs")
+    .select(
+      "id, project_id, log_date, tasks_done, tracker_minutes, created_by, updated_by, created_at, updated_at",
+    )
+    .order("log_date", { ascending: false })
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return rows || [];
+}
+
+export async function getProjectsSummaryByIds(projectIds) {
+  if (!projectIds.length) return [];
+  const { data, error } = await supabase
+    .from("projects")
+    .select("id, name, client_name, job_type, assigned_to")
+    .in("id", projectIds);
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
 export async function findDailyLog(projectId, logId) {
   const { data, error } = await supabase
     .from("project_daily_logs")

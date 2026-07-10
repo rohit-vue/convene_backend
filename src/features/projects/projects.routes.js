@@ -7,6 +7,7 @@ const router = Router();
 
 router.get("/", requireAuth, asyncHandler(projectsController.list));
 router.get("/pending", requireAuth, asyncHandler(projectsController.listPending));
+router.get("/daily-logs", requireAuth, requireAdmin, asyncHandler(projectsController.listAllDailyLogs));
 router.post("/assign", requireAuth, requireAdmin, asyncHandler(projectsController.assign));
 router.patch("/:id/accept", requireAuth, requireEmployee, asyncHandler(projectsController.accept));
 router.post("/", requireAuth, requireEmployee, asyncHandler(projectsController.create));

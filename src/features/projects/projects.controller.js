@@ -71,6 +71,10 @@ export async function changeMilestoneCost(req, res) {
   respond(res, await projectsService.addMilestone(req, req.params.id, req.body));
 }
 
+export async function listAllDailyLogs(req, res) {
+  respond(res, await projectsService.listAllDailyLogs(req));
+}
+
 export async function getDailyLogs(req, res) {
   respond(res, await projectsService.getDailyLogs(req, req.params.id));
 }
