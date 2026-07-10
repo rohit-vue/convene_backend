@@ -3,6 +3,7 @@ import {
   PROJECT_PRIORITIES,
   PROJECT_JOB_TYPES,
   PROJECT_JOB_CATEGORIES,
+  PROJECT_UPWORK_ACCOUNTS,
   INHOUSE_UPWORK_ACCOUNT,
 } from "./projects.constants.js";
 
@@ -15,10 +16,40 @@ export function parseMoneyAmount(value) {
 
 export function validateProjectFields(body, { partial = false } = {}) {
   const errors = [];
-  const { status, priority, job_type, job_category } = body;
+  const { status, priority, job_type, job_category, upwork_account, start_date, client_name } = body;
+  const isInhouse = upwork_account === INHOUSE_UPWORK_ACCOUNT;
 
   if (!partial && !body.name) errors.push("name is required");
-  if (status && !PROJECT_STATUSES.includes(status)) errors.push("Invalid status");
+
+  if (!partial) {
+    if (!upwork_account) errors.push("upwork_account is required");
+    else if (!PROJECT_UPWORK_ACCOUNTS.includes(upwork_account)) {
+      errors.push("Invalid upwork account");
+    }
+    if (!start_date) errors.push("start_date is required");
+    if (!status) errors.push("status is required");
+    else if (!PROJECT_STATUSES.includes(status)) errors.push("Invalid status");
+    if (!isInhouse && !String(client_name || "").trim()) {
+      errors.push("client_name is required");
+    }
+    if (!isInhouse && !job_type) errors.push("job_type is required");
+  } else {
+    if (status && !PROJECT_STATUSES.includes(status)) errors.push("Invalid status");
+    if (upwork_account !== undefined) {
+      if (!upwork_account) errors.push("upwork_account is required");
+      else if (!PROJECT_UPWORK_ACCOUNTS.includes(upwork_account)) {
+        errors.push("Invalid upwork account");
+      }
+    }
+    if (start_date !== undefined && !start_date) errors.push("start_date is required");
+    if (client_name !== undefined && !isInhouse && !String(client_name || "").trim()) {
+      errors.push("client_name is required");
+    }
+    if (job_type !== undefined && !isInhouse && !job_type) {
+      errors.push("job_type is required");
+    }
+  }
+
   if (priority && !PROJECT_PRIORITIES.includes(priority)) errors.push("Invalid priority");
   if (job_type && !PROJECT_JOB_TYPES.includes(job_type)) errors.push("Invalid job type");
   if (job_category && !PROJECT_JOB_CATEGORIES.includes(job_category)) {
@@ -36,6 +67,7 @@ function normalizeInhouseProjectFields(body) {
   if (body.upwork_account !== INHOUSE_UPWORK_ACCOUNT) return body;
   return {
     ...body,
+    client_name: null,
     job_type: null,
     link_url: null,
     hourly_rate: null,
@@ -74,6 +106,7 @@ export function projectPayload(body, { forInsert = false } = {}) {
     if (body[key] !== undefined) updates[key] = value;
   }
   if (normalized.upwork_account === INHOUSE_UPWORK_ACCOUNT) {
+    updates.client_name = null;
     updates.job_type = null;
     updates.link_url = null;
     updates.hourly_rate = null;

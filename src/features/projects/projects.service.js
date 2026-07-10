@@ -244,24 +244,27 @@ export async function assignProject(req, body) {
     link_url,
   } = body;
 
-  if (!employee_id || !name || !client_name) {
+  if (!employee_id || !name) {
     return {
-      error: "employee_id, name and client_name are required",
+      error: "employee_id and name are required",
       status: 400,
     };
   }
+
+  const isInhouse = upwork_account === INHOUSE_UPWORK_ACCOUNT;
 
   const validationErrors = validateProjectFields({
     name,
     client_name,
     job_category,
     job_type,
+    upwork_account,
+    start_date,
+    status: "planning",
   });
   if (validationErrors.length) {
     return { error: validationErrors[0], status: 400 };
   }
-
-  const isInhouse = upwork_account === INHOUSE_UPWORK_ACCOUNT;
 
   const employee = await projectsRepo.findEmployeeProfile(employee_id);
   if (!employee || employee.role !== "employee") {
@@ -272,7 +275,7 @@ export async function assignProject(req, body) {
   try {
     project = await projectsRepo.insert({
       name: String(name).trim(),
-      client_name: String(client_name).trim(),
+      client_name: isInhouse ? null : String(client_name).trim(),
       status: "planning",
       priority: "medium",
       start_date: start_date || null,

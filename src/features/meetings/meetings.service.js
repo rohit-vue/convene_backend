@@ -106,9 +106,9 @@ export async function createMeeting(req, body) {
     link_url,
   } = body;
 
-  if (!project_name || !client_name || !meeting_at || !meeting_outcome) {
+  if (!project_name || !client_name || !project_type || !upwork_account || !meeting_at || !meeting_outcome) {
     return {
-      error: "project_name, client_name, meeting_at and meeting_outcome are required",
+      error: "project_name, client_name, project_type, upwork_account, meeting_at and meeting_outcome are required",
       status: 400,
     };
   }
@@ -265,8 +265,11 @@ export async function updateMeetingParent(req, meetingId, body) {
   const { project_name, client_name, project_type, upwork_account, job_description, link_url } =
     body;
 
-  if (!project_name || !client_name) {
-    return { error: "project_name and client_name are required", status: 400 };
+  if (!project_name || !client_name || !project_type || !upwork_account) {
+    return {
+      error: "project_name, client_name, project_type and upwork_account are required",
+      status: 400,
+    };
   }
 
   try {
