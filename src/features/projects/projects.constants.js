@@ -12,3 +12,14 @@ export const PROJECT_JOB_CATEGORIES = [
   "qa_testing",
   "other",
 ];
+
+export const PROJECT_UPWORK_ACCOUNTS = [
+  "Rohit K",
+  "Vaibhav Srivastav",
+  "Gulshan Khera",
+  "Ashutosh Pandey",
+  "Siddhart Srivastav",
+  "Inhouse",
+];
+
+export const INHOUSE_UPWORK_ACCOUNT = "Inhouse";

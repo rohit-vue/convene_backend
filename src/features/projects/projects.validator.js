@@ -3,6 +3,7 @@ import {
   PROJECT_PRIORITIES,
   PROJECT_JOB_TYPES,
   PROJECT_JOB_CATEGORIES,
+  INHOUSE_UPWORK_ACCOUNT,
 } from "./projects.constants.js";
 
 export function parseMoneyAmount(value) {
@@ -31,27 +32,38 @@ export function validateProjectFields(body, { partial = false } = {}) {
   return errors;
 }
 
+function normalizeInhouseProjectFields(body) {
+  if (body.upwork_account !== INHOUSE_UPWORK_ACCOUNT) return body;
+  return {
+    ...body,
+    job_type: null,
+    link_url: null,
+    hourly_rate: null,
+  };
+}
+
 export function projectPayload(body, { forInsert = false } = {}) {
+  const normalized = normalizeInhouseProjectFields(body);
   const fields = {
-    name: body.name,
-    client_name: body.client_name || null,
-    description: body.description || null,
-    status: body.status || "planning",
-    priority: body.priority || "medium",
-    start_date: body.start_date || null,
-    due_date: body.due_date || null,
-    job_description: body.job_description || null,
-    requirements: body.requirements || null,
-    job_category: body.job_category || null,
-    job_type: body.job_type || null,
-    upwork_account: body.upwork_account || null,
-    link_url: body.link_url || null,
-    notes: body.notes || null,
-    assigned_to: body.assigned_to || null,
+    name: normalized.name,
+    client_name: normalized.client_name || null,
+    description: normalized.description || null,
+    status: normalized.status || "planning",
+    priority: normalized.priority || "medium",
+    start_date: normalized.start_date || null,
+    due_date: normalized.due_date || null,
+    job_description: normalized.job_description || null,
+    requirements: normalized.requirements || null,
+    job_category: normalized.job_category || null,
+    job_type: normalized.job_type || null,
+    upwork_account: normalized.upwork_account || null,
+    link_url: normalized.link_url || null,
+    notes: normalized.notes || null,
+    assigned_to: normalized.assigned_to || null,
     hourly_rate:
-      body.hourly_rate === undefined || body.hourly_rate === null || body.hourly_rate === ""
+      normalized.hourly_rate === undefined || normalized.hourly_rate === null || normalized.hourly_rate === ""
         ? null
-        : parseMoneyAmount(body.hourly_rate),
+        : parseMoneyAmount(normalized.hourly_rate),
   };
 
   if (forInsert) return fields;
@@ -60,6 +72,11 @@ export function projectPayload(body, { forInsert = false } = {}) {
   for (const [key, value] of Object.entries(fields)) {
     if (key === "status") continue;
     if (body[key] !== undefined) updates[key] = value;
+  }
+  if (normalized.upwork_account === INHOUSE_UPWORK_ACCOUNT) {
+    updates.job_type = null;
+    updates.link_url = null;
+    updates.hourly_rate = null;
   }
   return updates;
 }
