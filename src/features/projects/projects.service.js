@@ -1,4 +1,4 @@
-import { PROJECT_STATUSES } from "./projects.constants.js";
+import { PROJECT_STATUSES, INHOUSE_UPWORK_ACCOUNT } from "./projects.constants.js";
 import {
   validateProjectFields,
   projectPayload,
@@ -261,6 +261,8 @@ export async function assignProject(req, body) {
     return { error: validationErrors[0], status: 400 };
   }
 
+  const isInhouse = upwork_account === INHOUSE_UPWORK_ACCOUNT;
+
   const employee = await projectsRepo.findEmployeeProfile(employee_id);
   if (!employee || employee.role !== "employee") {
     return { error: "Valid employee is required", status: 400 };
@@ -275,9 +277,9 @@ export async function assignProject(req, body) {
       priority: "medium",
       start_date: start_date || null,
       job_category: job_category || null,
-      job_type: job_type || null,
+      job_type: isInhouse ? null : job_type || null,
       upwork_account: upwork_account || null,
-      link_url: link_url || null,
+      link_url: isInhouse ? null : link_url || null,
       assigned_to: employee_id,
       assignment_status: "pending",
       assigned_by: req.user.id,
